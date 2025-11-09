@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  # Base de données PostgreSQL
+  database:
+    image: postgres:15-alpine
+    container_name: facturepro-db
+    environment:
+      POSTGRES_DB: facturepro
+      POSTGRES_USER: facturepro
+      POSTGRES_PASSWORD: secure_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=fr_FR.UTF-8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - facturepro-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U facturepro -d facturepro"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis pour le cache et les sessions (optionnel pour plus tard)
+  redis:
+    image: redis:7-alpine
+    container_name: facturepro-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - facturepro-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # API Backend
+  api:
+    build: .
+    container_name: facturepro-api
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+
+      # Database
+      DB_HOST: database
+      DB_PORT: 5432
+      DB_NAME: facturepro
+      DB_USER: facturepro
+      DB_PASSWORD: secure_password
+      DB_DIALECT: postgres
+
+      # JWT
+      JWT_SECRET: dev-jwt-secret-change-in-production
+      JWT_REFRESH_SECRET: dev-refresh-secret-change-in-production
+      JWT_EXPIRE: 24h
+      JWT_REFRESH_EXPIRE: 7d
+
+      # APIs externes
+      INSEE_API_TOKEN: ${INSEE_API_TOKEN:-}
+      INSEE_API_URL: https://api.insee.fr/entreprises/sirene/V3
+
+      # CORS
+      CORS_ORIGIN: http://localhost:3000
+
+      # Logging
+      LOG_LEVEL: debug
+
+      # Rate limiting
+      RATE_LIMIT_WINDOW_MS: 900000
+      RATE_LIMIT_MAX_REQUESTS: 100
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    networks:
+      - facturepro-network
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Adminer pour administrer la base de données (dev seulement)
+  adminer:
+    image: adminer:4
+    container_name: facturepro-adminer
+    ports:
+      - "8080:8080"
+    networks:
+      - facturepro-network
+    depends_on:
+      - database
+    restart: unless-stopped
+    profiles:
+      - dev
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  facturepro-network:
+    driver: bridge

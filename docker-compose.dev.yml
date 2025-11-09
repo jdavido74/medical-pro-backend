@@ -1,0 +1,22 @@
+# Docker Compose pour développement avec hot reload
+version: '3.8'
+
+services:
+  # Override pour le développement
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      NODE_ENV: development
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./logs:/app/logs
+    command: npm run dev
+    stdin_open: true
+    tty: true
+
+  # Activer Adminer en développement
+  adminer:
+    profiles: []

@@ -1,0 +1,35 @@
+# Dockerfile pour développement avec hot reload
+FROM node:18-alpine
+
+# Installer les dépendances système
+RUN apk add --no-cache \
+    postgresql-client \
+    curl \
+    git \
+    && rm -rf /var/cache/apk/*
+
+# Créer un utilisateur pour le développement
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S facturepro -u 1001
+
+WORKDIR /app
+
+# Copier les fichiers de dépendances
+COPY package*.json ./
+
+# Installer toutes les dépendances (dev incluses)
+RUN npm install
+
+# Changer l'ownership pour l'utilisateur facturepro
+RUN chown -R facturepro:nodejs /app
+
+# Créer les répertoires nécessaires
+RUN mkdir -p logs && \
+    chown -R facturepro:nodejs logs
+
+USER facturepro
+
+EXPOSE 3001
+
+# Commande par défaut (peut être overridée)
+CMD ["npm", "run", "dev"]
