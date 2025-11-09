@@ -74,6 +74,22 @@ const User = sequelize.define('User', {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: true
+  },
+  email_verified: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: 'Email verification status'
+  },
+  email_verification_token: {
+    type: DataTypes.STRING(500),
+    allowNull: true,
+    comment: 'JWT token for email verification (expires in 24h)'
+  },
+  email_verified_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Timestamp when email was verified'
   }
 }, {
   tableName: 'users',
@@ -91,6 +107,9 @@ const User = sequelize.define('User', {
     },
     {
       fields: ['is_active']
+    },
+    {
+      fields: ['email_verified']
     }
   ],
   hooks: {

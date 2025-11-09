@@ -12,10 +12,13 @@
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../config/jwt');
 const { Company, User, sequelize } = require('../models');
 const { logger } = require('../utils/logger');
 const Joi = require('joi');
+const emailService = require('../services/emailService');
+const clinicProvisioningService = require('../services/clinicProvisioningService');
 
 const router = express.Router();
 
@@ -59,7 +62,9 @@ const refreshTokenSchema = Joi.object({
 
 /**
  * @route POST /api/v1/auth/register
- * @desc Register new company and user
+ * @desc Register new company and user with email verification
+ * @desc User must verify email before accessing the platform
+ * @desc Clinic database is auto-provisioned upon successful registration
  * @access Public
  */
 router.post('/register', async (req, res, next) => {
@@ -120,9 +125,9 @@ router.post('/register', async (req, res, next) => {
       });
     }
 
-    // Créer l'entreprise et l'utilisateur en transaction
+    // Create company and user in transaction
     const result = await sequelize.transaction(async (t) => {
-      // Créer l'entreprise
+      // Create company
       const company = await Company.create({
         name: companyName,
         country,
@@ -133,51 +138,95 @@ router.post('/register', async (req, res, next) => {
         address: address || {}
       }, { transaction: t });
 
-      // Créer l'utilisateur
+      // Create user with email_verified = false (pending email verification)
       const user = await User.create({
         company_id: company.id,
         email,
-        password_hash: password, // sera hashé par le hook beforeCreate
+        password_hash: password, // will be hashed by beforeCreate hook
         first_name: firstName,
         last_name: lastName,
-        role: 'admin'
+        role: 'admin',
+        email_verified: false // User cannot login until email is verified
       }, { transaction: t });
 
       return { company, user };
     });
 
-    logger.info(`New company registered: ${companyName}`, {
-      companyId: result.company.id,
-      userId: result.user.id,
-      country
-    });
+    // Auto-provision clinic database
+    let provisioningResult = null;
+    try {
+      provisioningResult = await clinicProvisioningService.provisionClinicDatabase({
+        clinicId: result.company.id,
+        clinicName: result.company.name,
+        country: result.company.country
+      });
+      logger.info(`✅ Clinic database provisioned for: ${result.company.id}`);
+    } catch (provisioningError) {
+      logger.error(`⚠️ Clinic provisioning failed but registration continues:`, provisioningError.message);
+      // Don't fail registration if provisioning fails - can retry later
+    }
 
-    // Générer les tokens
-    const tokenPayload = {
+    // Create email verification token (expires in 24 hours)
+    const verificationTokenPayload = {
       userId: result.user.id,
-      companyId: result.company.id,
       email: result.user.email,
-      role: result.user.role
+      companyId: result.company.id,
+      type: 'email_verification'
     };
 
-    const accessToken = generateAccessToken(tokenPayload);
-    const refreshToken = generateRefreshToken(tokenPayload);
+    const verificationToken = jwt.sign(
+      verificationTokenPayload,
+      process.env.JWT_SECRET || 'your-super-secret-jwt-key',
+      { expiresIn: '24h' }
+    );
+
+    // Save token to database
+    await result.user.update({
+      email_verification_token: verificationToken
+    });
+
+    // Build verification URL
+    const verificationUrl = `${process.env.APP_URL || 'http://localhost:3000'}/auth/verify-email/${verificationToken}`;
+
+    // Send verification email
+    try {
+      await emailService.sendVerificationEmail({
+        email: result.user.email,
+        firstName: result.user.first_name || 'User',
+        companyName: result.company.name,
+        verificationToken,
+        verificationUrl
+      });
+    } catch (emailError) {
+      logger.warn(`⚠️ Email sending failed but registration continues:`, emailError.message);
+      // Don't fail registration if email fails - user can request resend later
+    }
+
+    logger.info(`✅ New company registered (pending email verification): ${companyName}`, {
+      companyId: result.company.id,
+      userId: result.user.id,
+      country,
+      emailVerified: false,
+      clinicProvisioned: !!provisioningResult
+    });
 
     res.status(201).json({
       success: true,
       data: {
         user: result.user.toSafeJSON(),
         company: result.company.toSafeJSON(),
-        tokens: {
-          accessToken,
-          refreshToken,
-          expiresIn: '24h'
-        }
+        clinicProvisioned: !!provisioningResult
       },
-      message: 'Company and user registered successfully'
+      message: 'Registration successful. Please verify your email to activate your account.',
+      nextStep: {
+        action: 'VERIFY_EMAIL',
+        instructions: `A verification link has been sent to ${result.user.email}. Click the link to verify your email and activate your account.`,
+        expiresIn: '24 hours'
+      }
     });
 
   } catch (error) {
+    logger.error('Registration error:', error);
     next(error);
   }
 });
@@ -245,6 +294,26 @@ router.post('/login', async (req, res, next) => {
         error: {
           message: 'Invalid credentials',
           details: 'Email or password is incorrect'
+        }
+      });
+    }
+
+    // Vérifier que l'email est confirmé
+    if (!user.email_verified) {
+      logger.warn(`Login attempt with unverified email: ${email}`, {
+        userId: user.id,
+        ip: req.ip
+      });
+
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Email not verified',
+          details: 'Please verify your email address before logging in'
+        },
+        nextStep: {
+          action: 'VERIFY_EMAIL',
+          instructions: 'Check your email for a verification link. If you didn\'t receive it, request a new one.'
         }
       });
     }
@@ -407,6 +476,208 @@ router.get('/me', require('../middleware/auth').authMiddleware, async (req, res,
     });
 
   } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @route POST /api/v1/auth/verify-email/:token
+ * @desc Verify user email address via token
+ * @desc User must verify email before being able to login
+ * @access Public
+ */
+router.post('/verify-email/:token', async (req, res, next) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Invalid request',
+          details: 'Verification token is required'
+        }
+      });
+    }
+
+    // Verify and decode the token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-super-secret-jwt-key');
+    } catch (verifyError) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          message: 'Invalid or expired verification token',
+          details: 'The verification link has expired. Please request a new one.'
+        }
+      });
+    }
+
+    // Check token type
+    if (decoded.type !== 'email_verification') {
+      return res.status(401).json({
+        success: false,
+        error: {
+          message: 'Invalid token type',
+          details: 'This token cannot be used for email verification'
+        }
+      });
+    }
+
+    // Find user and verify
+    const user = await User.findByPk(decoded.userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: 'User not found',
+          details: 'The user account for this verification token does not exist'
+        }
+      });
+    }
+
+    // Check if already verified
+    if (user.email_verified) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Email already verified',
+          details: 'This email address has already been verified'
+        }
+      });
+    }
+
+    // Mark email as verified
+    await user.update({
+      email_verified: true,
+      email_verified_at: new Date(),
+      email_verification_token: null // Clear the token after use
+    });
+
+    logger.info(`✅ Email verified for user: ${user.email}`, {
+      userId: user.id,
+      companyId: user.company_id
+    });
+
+    // Send confirmation email (optional - doesn't fail if it fails)
+    try {
+      const company = await Company.findByPk(user.company_id);
+      await emailService.sendVerificationConfirmed({
+        email: user.email,
+        firstName: user.first_name || 'User',
+        companyName: company?.name || 'MedicalPro'
+      });
+    } catch (emailError) {
+      logger.warn(`⚠️ Failed to send confirmation email: ${emailError.message}`);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        user: user.toSafeJSON()
+      },
+      message: 'Email verified successfully! You can now login to your account.',
+      nextStep: {
+        action: 'LOGIN',
+        instructions: 'Go to the login page and enter your email and password to access your account.'
+      }
+    });
+
+  } catch (error) {
+    logger.error('Email verification error:', error);
+    next(error);
+  }
+});
+
+/**
+ * @route POST /api/v1/auth/resend-verification-email
+ * @desc Request a new email verification link
+ * @access Public
+ */
+router.post('/resend-verification-email', async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Invalid request',
+          details: 'Email address is required'
+        }
+      });
+    }
+
+    const user = await User.findOne({
+      where: { email: email.toLowerCase() },
+      include: [{ model: Company, as: 'company' }]
+    });
+
+    if (!user) {
+      // Don't reveal if email exists
+      return res.json({
+        success: true,
+        message: 'If this email exists, a new verification link has been sent.'
+      });
+    }
+
+    // If already verified, no need to resend
+    if (user.email_verified) {
+      return res.json({
+        success: true,
+        message: 'This email address is already verified. You can login now.'
+      });
+    }
+
+    // Generate new verification token
+    const verificationTokenPayload = {
+      userId: user.id,
+      email: user.email,
+      companyId: user.company_id,
+      type: 'email_verification'
+    };
+
+    const verificationToken = jwt.sign(
+      verificationTokenPayload,
+      process.env.JWT_SECRET || 'your-super-secret-jwt-key',
+      { expiresIn: '24h' }
+    );
+
+    // Save new token
+    await user.update({
+      email_verification_token: verificationToken
+    });
+
+    // Build verification URL
+    const verificationUrl = `${process.env.APP_URL || 'http://localhost:3000'}/auth/verify-email/${verificationToken}`;
+
+    // Send verification email
+    try {
+      await emailService.sendVerificationEmail({
+        email: user.email,
+        firstName: user.first_name || 'User',
+        companyName: user.company.name,
+        verificationToken,
+        verificationUrl
+      });
+    } catch (emailError) {
+      logger.warn(`⚠️ Failed to send resend verification email:`, emailError.message);
+    }
+
+    logger.info(`✅ Verification email resent to: ${user.email}`, {
+      userId: user.id,
+      companyId: user.company_id
+    });
+
+    res.json({
+      success: true,
+      message: 'A new verification link has been sent to your email address.'
+    });
+
+  } catch (error) {
+    logger.error('Resend verification email error:', error);
     next(error);
   }
 });
