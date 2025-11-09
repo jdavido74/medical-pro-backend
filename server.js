@@ -33,6 +33,7 @@ const consentTemplateRoutes = require('./src/routes/consent-templates');
 const errorHandler = require('./src/middleware/errorHandler');
 const { authMiddleware } = require('./src/middleware/auth');
 const { clinicRoutingMiddleware } = require('./src/middleware/clinicRouting');
+const { regionMiddleware } = require('./src/utils/regionDetector');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -87,6 +88,9 @@ app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('combined', { stream: httpLoggerStream }));
+
+// Region detection middleware (detects country from sub-domain)
+app.use(regionMiddleware());
 
 // Rate limiting
 app.use(rateLimitMiddleware);
