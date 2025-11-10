@@ -75,9 +75,14 @@ app.use(helmet({
   referrerPolicy: { policy: "same-origin" }
 }));
 
-// CORS configuration
+// CORS configuration - Handle both single and multiple origins
+const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
+const corsOriginList = corsOrigin.includes(',')
+  ? corsOrigin.split(',').map(o => o.trim())
+  : [corsOrigin];
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  origin: corsOriginList.length === 1 ? corsOriginList[0] : corsOriginList,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
