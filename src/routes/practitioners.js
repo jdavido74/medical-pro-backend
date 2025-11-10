@@ -19,7 +19,17 @@ const querySchema = Joi.object({
 
 const practitionerRoutes = clinicCrudRoutes('Practitioner', {
   createSchema: schemas.createPractitionerSchema,
-  updateSchema: schemas.createPractitionerSchema.optional(),
+  updateSchema: Joi.object({
+    first_name: schemas.firstName,
+    last_name: schemas.lastName,
+    email: schemas.email,
+    phone: schemas.phone,
+    license_number: Joi.string().max(50).optional(),
+    specialty: Joi.string().max(100).optional(),
+    qualifications: Joi.array().items(Joi.string()).optional(),
+    is_active: Joi.boolean().optional(),
+    notes: Joi.string().max(1000).optional()
+  }).min(1),
   querySchema,
   displayName: 'Practitioner',
   searchFields: ['firstName', 'lastName', 'licenseNumber']

@@ -23,19 +23,29 @@ class EmailService {
     const smtpUser = process.env.SMTP_USER;
     const smtpPassword = process.env.SMTP_PASSWORD;
 
-    // If Mailtrap or other SMTP is configured, use it
-    if (smtpHost && smtpUser && smtpPassword) {
-      this.transporter = nodemailer.createTransport({
+    console.log('[EmailService] Initializing with:', { smtpHost, smtpPort, smtpUser: smtpUser ? 'SET' : 'EMPTY', smtpPassword: smtpPassword ? 'SET' : 'EMPTY' });
+
+    // If SMTP host is configured, use it (with or without authentication)
+    if (smtpHost) {
+      const transportConfig = {
         host: smtpHost,
         port: parseInt(smtpPort) || 587,
         secure: (smtpPort == 465), // true for 465, false for other ports
-        auth: {
-          user: smtpUser,
-          pass: smtpPassword
-        }
-      });
+        ignoreSTARTTLS: true
+      };
+
+      // Only add auth if credentials are provided (not needed for Mailhog)
+      if (smtpUser || smtpPassword) {
+        transportConfig.auth = {
+          user: smtpUser || '',
+          pass: smtpPassword || ''
+        };
+      }
+
+      this.transporter = nodemailer.createTransport(transportConfig);
       this.provider = 'smtp';
-      logger.info(`✅ Email service initialized with SMTP provider: ${smtpHost}`);
+      console.log('[EmailService] Config:', JSON.stringify(transportConfig, null, 2));
+      logger.info(`✅ Email service initialized with SMTP provider: ${smtpHost}:${smtpPort}`);
     } else {
       // Fallback to console for development
       this.transporter = nodemailer.createTransport({
@@ -59,6 +69,8 @@ class EmailService {
    */
   async sendVerificationEmail({ email, firstName, companyName, verificationToken, verificationUrl }) {
     try {
+      console.log('[EmailService] Attempting to send verification email:', { email, provider: this.provider });
+
       const mailOptions = {
         from: process.env.FROM_EMAIL || 'noreply@medicalpro.com',
         to: email,
@@ -71,8 +83,12 @@ class EmailService {
         })
       };
 
+      console.log('[EmailService] Mail options prepared:', { from: mailOptions.from, to: mailOptions.to });
+
       // Send email
       const result = await this.transporter.sendMail(mailOptions);
+
+      console.log('[EmailService] Email sent successfully:', { messageId: result.messageId });
 
       // Log in development
       if (this.provider === 'console') {
@@ -101,7 +117,8 @@ class EmailService {
         message: 'Verification email sent successfully'
       };
     } catch (error) {
-      logger.error(`❌ Failed to send verification email to ${email}:`, error);
+      console.error('[EmailService] Error details:', { message: error.message, code: error.code, stack: error.stack });
+      logger.error(`❌ Failed to send verification email to ${email}:`, error.message);
       throw new Error(`Email sending failed: ${error.message}`);
     }
   }

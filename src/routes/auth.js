@@ -13,6 +13,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../config/jwt');
 const { Company, User, sequelize } = require('../models');
 const { logger } = require('../utils/logger');
@@ -127,15 +128,26 @@ router.post('/register', async (req, res, next) => {
 
     // Create company and user in transaction
     const result = await sequelize.transaction(async (t) => {
+      // Generate clinic database name from company name and UUID
+      const clinicId = uuidv4();
+      const sanitizedName = companyName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
+
       // Create company
       const company = await Company.create({
+        id: clinicId,
         name: companyName,
         country,
         business_number: businessNumber,
         vat_number: vatNumber,
         email: companyEmail,
         phone: companyPhone,
-        address: address || {}
+        address: address || {},
+        db_name: dbName,
+        db_host: process.env.DB_HOST || 'localhost',
+        db_port: parseInt(process.env.DB_PORT) || 5432,
+        db_user: process.env.DB_USER || 'medicalpro',
+        db_password: process.env.DB_PASSWORD || 'medicalpro2024'
       }, { transaction: t });
 
       // Create user with email_verified = false (pending email verification)

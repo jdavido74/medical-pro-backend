@@ -168,3 +168,15 @@ module.exports.createConsentSchema = Joi.object({
   accepted_at: Joi.date().iso().optional(),
   expires_at: Joi.date().iso().optional()
 });
+
+module.exports.createPractitionerSchema = Joi.object({
+  first_name: atomicSchemas.firstName.required(),
+  last_name: atomicSchemas.lastName.required(),
+  email: atomicSchemas.email.optional(),
+  phone: atomicSchemas.phone.optional(),
+  license_number: Joi.string().max(50).required(),
+  specialty: Joi.string().max(100).optional(),
+  qualifications: Joi.array().items(Joi.string()).optional(),
+  is_active: atomicSchemas.isActive.default(true),
+  notes: atomicSchemas.notes
+});

@@ -1,13 +1,13 @@
 const { Sequelize } = require('sequelize');
 const winston = require('winston');
 
-// Configuration de la base de données
+// Configuration de la base de données (central database)
 const sequelize = new Sequelize({
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'facturepro',
-  username: process.env.DB_USER || 'facturepro',
-  password: process.env.DB_PASSWORD || 'secure_password',
+  database: process.env.CENTRAL_DB_NAME || 'medicalpro_central',
+  username: process.env.DB_USER || 'medicalpro',
+  password: process.env.DB_PASSWORD || 'medicalpro2024',
   dialect: process.env.DB_DIALECT || 'postgres',
   logging: process.env.NODE_ENV === 'development' ? console.log : false,
   pool: {
@@ -40,12 +40,16 @@ const testConnection = async () => {
 const syncDatabase = async (force = false) => {
   try {
     if (process.env.NODE_ENV === 'development') {
-      await sequelize.sync({ force });
+      await sequelize.sync({ force, alter: false });
       winston.info('✅ Database synchronized');
     }
   } catch (error) {
-    winston.error('❌ Database sync failed:', error.message);
-    throw error;
+    // Log the error but don't fail the server startup
+    // Tables should already exist in production
+    winston.warn('⚠️ Database sync warning:', error.message);
+    if (process.env.NODE_ENV === 'development') {
+      winston.warn('Note: Make sure UUID-OSSP extension is installed: CREATE EXTENSION IF NOT EXISTS "uuid-ossp";');
+    }
   }
 };
 
