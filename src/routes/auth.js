@@ -207,7 +207,8 @@ router.post('/register', async (req, res, next) => {
         firstName: result.user.first_name || 'User',
         companyName: result.company.name,
         verificationToken,
-        verificationUrl
+        verificationUrl,
+        region: result.company.country || 'FR'
       });
     } catch (emailError) {
       logger.warn(`⚠️ Email sending failed but registration continues:`, emailError.message);
@@ -579,7 +580,8 @@ router.post('/verify-email/:token', async (req, res, next) => {
       await emailService.sendVerificationConfirmed({
         email: user.email,
         firstName: user.first_name || 'User',
-        companyName: company?.name || 'MedicalPro'
+        companyName: company?.name || 'MedicalPro',
+        region: company?.country || 'FR'
       });
     } catch (emailError) {
       logger.warn(`⚠️ Failed to send confirmation email: ${emailError.message}`);
@@ -672,7 +674,8 @@ router.post('/resend-verification-email', async (req, res, next) => {
         firstName: user.first_name || 'User',
         companyName: user.company.name,
         verificationToken,
-        verificationUrl
+        verificationUrl,
+        region: user.company.country || 'FR'
       });
     } catch (emailError) {
       logger.warn(`⚠️ Failed to send resend verification email:`, emailError.message);
