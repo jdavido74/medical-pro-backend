@@ -926,7 +926,7 @@ router.get('/services-health', requireSuperAdmin, async (req, res, next) => {
 
     // Count clinic databases
     try {
-      const companies = await Company.count({ where: { is_active: true } });
+      const companies = await Company.count();
       healthStatus.services.clinicDatabases = {
         name: 'Clinic Databases',
         status: 'running',

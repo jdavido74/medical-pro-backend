@@ -232,6 +232,49 @@ const User = sequelize.define('User', {
 User.prototype.toSafeJSON = function() {
   const values = Object.assign({}, this.get());
   delete values.password_hash;
+
+  // Convert snake_case database field names to camelCase for frontend consistency
+  if (values.first_name !== undefined) {
+    values.firstName = values.first_name;
+    delete values.first_name;
+  }
+  if (values.last_name !== undefined) {
+    values.lastName = values.last_name;
+    delete values.last_name;
+  }
+  if (values.company_id !== undefined) {
+    values.companyId = values.company_id;
+    delete values.company_id;
+  }
+  if (values.email_verified !== undefined) {
+    values.isEmailVerified = values.email_verified;
+    delete values.email_verified;
+  }
+  if (values.is_active !== undefined) {
+    values.isActive = values.is_active;
+    delete values.is_active;
+  }
+  if (values.last_login !== undefined) {
+    values.lastLogin = values.last_login;
+    delete values.last_login;
+  }
+  if (values.created_at !== undefined) {
+    values.createdAt = values.created_at;
+    delete values.created_at;
+  }
+  if (values.updated_at !== undefined) {
+    values.updatedAt = values.updated_at;
+    delete values.updated_at;
+  }
+  if (values.email_verification_token !== undefined) {
+    values.emailVerificationToken = values.email_verification_token;
+    delete values.email_verification_token;
+  }
+  if (values.email_verified_at !== undefined) {
+    values.emailVerifiedAt = values.email_verified_at;
+    delete values.email_verified_at;
+  }
+
   // Add combined name field for frontend display (combines first_name and last_name)
   values.name = this.getFullName();
   return values;
