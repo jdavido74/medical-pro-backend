@@ -119,7 +119,8 @@ app.use(`/api/${API_VERSION}/clients`, authMiddleware, clinicRoutingMiddleware, 
 app.use(`/api/${API_VERSION}/invoices`, authMiddleware, clinicRoutingMiddleware, invoiceRoutes);
 app.use(`/api/${API_VERSION}/quotes`, authMiddleware, clinicRoutingMiddleware, quoteRoutes);
 app.use(`/api/${API_VERSION}/validation`, authMiddleware, clinicRoutingMiddleware, validationRoutes);
-app.use(`/api/${API_VERSION}/admin`, authMiddleware, clinicRoutingMiddleware, adminRoutes);
+// Admin routes use ONLY central database - super_admin should NOT use clinic routing
+app.use(`/api/${API_VERSION}/admin`, authMiddleware, adminRoutes);
 app.use(`/api/${API_VERSION}/products`, authMiddleware, clinicRoutingMiddleware, productRoutes);
 app.use(`/api/${API_VERSION}/categories`, authMiddleware, clinicRoutingMiddleware, categoryRoutes);
 

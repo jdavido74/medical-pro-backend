@@ -506,26 +506,38 @@ router.delete('/companies/:id', requireSuperAdmin, async (req, res, next) => {
     }
 
     if (permanent === 'true') {
-      // Suppression définitive (cascade sur users, clients, etc.)
+      // HARD DELETE: Suppression définitive (développement/test uniquement)
+      // NOTE: Cette fonctionnalité sera supprimée en production
+      const { Client: ClientModel } = require('../models');
+      const sequelize = require('../config/database').sequelize;
+
+      // Supprimer les données de la clinique
+      await User.destroy({ where: { company_id: companyId } });
+      await ClientModel.destroy({ where: { company_id: companyId } });
+      await Invoice.destroy({ where: { company_id: companyId } });
+      await Quote.destroy({ where: { company_id: companyId } });
+
+      // Supprimer la company
       await company.destroy();
-      logger.warn(`Company permanently deleted by super admin: ${companyId}`);
+
+      logger.warn(`Company PERMANENTLY deleted by super admin: ${companyId}`);
 
       res.json({
         success: true,
-        message: 'Company permanently deleted'
-      });
-    } else {
-      // Désactivation (soft delete)
-      await company.update({
-        settings: {
-          ...company.settings,
-          isActive: false,
-          deactivatedAt: new Date(),
-          deactivatedBy: req.user.id
+        message: 'Company permanently deleted',
+        data: {
+          companyId,
+          deletedAt: new Date()
         }
       });
+    } else {
+      // SOFT DELETE: Désactivation (production)
+      await company.update({
+        is_active: false,
+        deleted_at: new Date()
+      });
 
-      // Désactiver tous les utilisateurs
+      // Désactiver tous les utilisateurs de la clinique
       await User.update(
         { is_active: false },
         { where: { company_id: companyId } }
@@ -535,12 +547,411 @@ router.delete('/companies/:id', requireSuperAdmin, async (req, res, next) => {
 
       res.json({
         success: true,
-        message: 'Company deactivated successfully'
+        message: 'Company deactivated successfully',
+        data: {
+          companyId,
+          status: 'inactive',
+          deactivatedAt: company.deleted_at
+        }
       });
     }
 
   } catch (error) {
     logger.error('Error deleting/deactivating company:', error);
+    next(error);
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/companies/:id/reactivate
+ * @desc Reactivate a deactivated company
+ * @access Super Admin
+ */
+router.post('/companies/:id/reactivate', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const companyId = req.params.id;
+
+    const company = await Company.findByPk(companyId);
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: 'Company not found',
+          details: 'The specified company does not exist'
+        }
+      });
+    }
+
+    // Réactiver la clinique
+    await company.update({
+      is_active: true,
+      deleted_at: null
+    });
+
+    // Réactiver les utilisateurs (optionnel - l'admin peut décider)
+    // await User.update(
+    //   { is_active: true },
+    //   { where: { company_id: companyId } }
+    // );
+
+    logger.info(`Company reactivated by super admin: ${companyId}`);
+
+    res.json({
+      success: true,
+      message: 'Company reactivated successfully',
+      data: {
+        companyId,
+        status: 'active',
+        reactivatedAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error reactivating company:', error);
+    next(error);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/companies/:id/database-info
+ * @desc Get database information for a specific clinic
+ * @access Super Admin
+ */
+router.get('/companies/:id/database-info', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const companyId = req.params.id;
+
+    const company = await Company.findByPk(companyId);
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: 'Company not found',
+          details: 'The specified company does not exist'
+        }
+      });
+    }
+
+    const dbName = `medicalpro_clinic_${companyId}`;
+
+    // Informations sur la base de données
+    const dbInfo = {
+      databaseName: dbName,
+      companyId,
+      companyName: company.name,
+      country: company.country,
+      isActive: company.is_active,
+      createdAt: company.created_at,
+      deactivatedAt: company.deleted_at
+    };
+
+    res.json({
+      success: true,
+      data: {
+        database: dbInfo
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error fetching database info:', error);
+    next(error);
+  }
+});
+
+/**
+ * @route DELETE /api/v1/admin/companies/:id/database-data
+ * @desc Clear all data from a clinic database (keeping schema)
+ * @access Super Admin
+ */
+router.delete('/companies/:id/database-data', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const companyId = req.params.id;
+
+    const company = await Company.findByPk(companyId);
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: 'Company not found',
+          details: 'The specified company does not exist'
+        }
+      });
+    }
+
+    // Supprimer les données de la clinique (sans supprimer la company elle-même)
+    const { Client: ClientModel } = require('../models');
+
+    await Promise.all([
+      User.destroy({ where: { company_id: companyId } }),
+      ClientModel.destroy({ where: { company_id: companyId } }),
+      Invoice.destroy({ where: { company_id: companyId } }),
+      Quote.destroy({ where: { company_id: companyId } })
+    ]);
+
+    logger.info(`Database data cleared for company: ${companyId}`);
+
+    res.json({
+      success: true,
+      message: 'Clinic database data cleared successfully',
+      data: {
+        companyId,
+        clearedAt: new Date(),
+        affectedTables: ['users', 'clients', 'invoices', 'quotes']
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error clearing clinic database data:', error);
+    next(error);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/databases
+ * @desc List all clinic databases with their status
+ * @access Super Admin
+ */
+router.get('/databases', requireSuperAdmin, async (req, res, next) => {
+  try {
+    // Récupérer toutes les cliniques avec les infos de leurs bases
+    const companies = await Company.findAll({
+      attributes: ['id', 'name', 'country', 'is_active', 'created_at', 'deleted_at'],
+      raw: true,
+      order: [['created_at', 'DESC']]
+    });
+
+    // Enrichir avec les infos de bases de données
+    const databases = companies.map(company => ({
+      databaseName: `medicalpro_clinic_${company.id}`,
+      companyId: company.id,
+      companyName: company.name,
+      country: company.country,
+      status: company.is_active ? 'active' : 'inactive',
+      createdAt: company.created_at,
+      deactivatedAt: company.deleted_at
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        databases,
+        total: databases.length,
+        active: databases.filter(d => d.status === 'active').length,
+        inactive: databases.filter(d => d.status === 'inactive').length
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error listing databases:', error);
+    next(error);
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/services/control
+ * @desc Control services (stop/restart Mailhog, Frontend, etc.)
+ * @access Super Admin
+ */
+router.post('/services/control', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const { action, service } = req.body;
+
+    if (!action || !service) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Missing parameters',
+          details: 'action and service parameters are required'
+        }
+      });
+    }
+
+    const validActions = ['stop', 'restart'];
+    const validServices = ['mailhog', 'frontend'];
+
+    if (!validActions.includes(action) || !validServices.includes(service)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Invalid parameters',
+          details: 'action must be "stop" or "restart", service must be "mailhog" or "frontend"'
+        }
+      });
+    }
+
+    const { spawn, exec } = require('child_process');
+    let result = null;
+
+    if (service === 'mailhog') {
+      if (action === 'stop') {
+        exec('pkill -f "mailhog"', (error) => {
+          if (error && error.code !== 0) {
+            logger.warn('Mailhog might not have been running');
+          }
+        });
+        result = { service: 'mailhog', action: 'stop', timestamp: new Date() };
+      } else if (action === 'restart') {
+        exec('pkill -f "mailhog"', (error) => {
+          setTimeout(() => {
+            spawn('mailhog', [], { detached: true, stdio: 'ignore' }).unref();
+            logger.info('Mailhog restarted');
+          }, 1000);
+        });
+        result = { service: 'mailhog', action: 'restart', timestamp: new Date() };
+      }
+    } else if (service === 'frontend') {
+      if (action === 'stop') {
+        exec('pkill -f "PORT=3000 npm start"', (error) => {
+          if (error && error.code !== 0) {
+            logger.warn('Frontend might not have been running');
+          }
+        });
+        result = { service: 'frontend', action: 'stop', timestamp: new Date() };
+      } else if (action === 'restart') {
+        exec('pkill -f "PORT=3000 npm start"', (error) => {
+          setTimeout(() => {
+            spawn('bash', ['-c', 'cd /var/www/medical-pro && PORT=3000 npm start > /tmp/frontend.log 2>&1'], {
+              detached: true,
+              stdio: 'ignore'
+            }).unref();
+            logger.info('Frontend restarted');
+          }, 1000);
+        });
+        result = { service: 'frontend', action: 'restart', timestamp: new Date() };
+      }
+    }
+
+    logger.info(`Service control action: ${action} on ${service}`);
+
+    res.json({
+      success: true,
+      data: {
+        result,
+        message: `${service} ${action} initiated successfully`
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error controlling services:', error);
+    next(error);
+  }
+});
+
+/**
+ * @route GET /api/v1/admin/services-health
+ * @desc Check health status of all services (Backend, Frontend, Mailhog, Databases)
+ * @access Super Admin
+ */
+router.get('/services-health', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const startTime = Date.now();
+    const healthStatus = {
+      timestamp: new Date().toISOString(),
+      services: {}
+    };
+
+    // Check Backend API (self)
+    healthStatus.services.backend = {
+      name: 'Backend API',
+      port: 3001,
+      status: 'running',
+      responseTime: Date.now() - startTime,
+      url: 'http://localhost:3001'
+    };
+
+    // Check Frontend (React App)
+    try {
+      const frontendStart = Date.now();
+      const frontendResponse = await fetch('http://localhost:3000', { timeout: 5000 });
+      healthStatus.services.frontend = {
+        name: 'Frontend Clinic',
+        port: 3000,
+        status: frontendResponse.ok ? 'running' : 'error',
+        responseTime: Date.now() - frontendStart,
+        statusCode: frontendResponse.status,
+        url: 'http://localhost:3000'
+      };
+    } catch (error) {
+      healthStatus.services.frontend = {
+        name: 'Frontend Clinic',
+        port: 3000,
+        status: 'unavailable',
+        error: error.message,
+        url: 'http://localhost:3000'
+      };
+    }
+
+    // Check Mailhog
+    try {
+      const mailhogStart = Date.now();
+      const mailhogResponse = await fetch('http://localhost:8025', { timeout: 5000 });
+      healthStatus.services.mailhog = {
+        name: 'Mailhog Email Service',
+        port: 8025,
+        status: mailhogResponse.ok ? 'running' : 'error',
+        responseTime: Date.now() - mailhogStart,
+        statusCode: mailhogResponse.status,
+        url: 'http://localhost:8025'
+      };
+    } catch (error) {
+      healthStatus.services.mailhog = {
+        name: 'Mailhog Email Service',
+        port: 8025,
+        status: 'unavailable',
+        error: error.message,
+        url: 'http://localhost:8025'
+      };
+    }
+
+    // Check Central Database
+    try {
+      const dbStart = Date.now();
+      const { getCentralConnection } = require('../config/connectionManager');
+      const central = getCentralConnection();
+      await central.authenticate();
+      healthStatus.services.centralDatabase = {
+        name: 'Central Database',
+        database: 'medicalpro_central',
+        status: 'running',
+        responseTime: Date.now() - dbStart
+      };
+    } catch (error) {
+      healthStatus.services.centralDatabase = {
+        name: 'Central Database',
+        database: 'medicalpro_central',
+        status: 'unavailable',
+        error: error.message
+      };
+    }
+
+    // Count clinic databases
+    try {
+      const companies = await Company.count({ where: { is_active: true } });
+      healthStatus.services.clinicDatabases = {
+        name: 'Clinic Databases',
+        status: 'running',
+        activeCount: companies
+      };
+    } catch (error) {
+      healthStatus.services.clinicDatabases = {
+        name: 'Clinic Databases',
+        status: 'unavailable',
+        error: error.message
+      };
+    }
+
+    // Calculate overall status
+    const serviceStatuses = Object.values(healthStatus.services).map(s => s.status);
+    const hasError = serviceStatuses.includes('unavailable') || serviceStatuses.includes('error');
+    healthStatus.overallStatus = hasError ? 'degraded' : 'healthy';
+
+    res.json({
+      success: true,
+      data: healthStatus
+    });
+
+  } catch (error) {
+    logger.error('Error checking services health:', error);
     next(error);
   }
 });
