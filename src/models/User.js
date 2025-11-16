@@ -232,6 +232,8 @@ const User = sequelize.define('User', {
 User.prototype.toSafeJSON = function() {
   const values = Object.assign({}, this.get());
   delete values.password_hash;
+  // Add combined name field for frontend display (combines first_name and last_name)
+  values.name = this.getFullName();
   return values;
 };
 
