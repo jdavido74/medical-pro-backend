@@ -173,6 +173,26 @@ router.post('/register', async (req, res, next) => {
         country: result.company.country
       });
       logger.info(`✅ Clinic database provisioned for: ${result.company.id}`);
+
+      // Create healthcare provider in clinic-specific database
+      // This syncs the user from central DB to clinic DB
+      const dbConfig = {
+        host: result.company.db_host || process.env.DB_HOST || 'localhost',
+        port: result.company.db_port || parseInt(process.env.DB_PORT) || 5432,
+        user: result.company.db_user || process.env.DB_USER || 'medicalpro',
+        password: result.company.db_password || process.env.DB_PASSWORD || 'medicalpro2024'
+      };
+
+      await clinicProvisioningService.createHealthcareProviderInClinic(
+        result.company.db_name,
+        dbConfig.user,
+        dbConfig.password,
+        dbConfig.host,
+        dbConfig.port,
+        result.company.id,
+        result.user.toJSON ? result.user.toJSON() : result.user.dataValues
+      );
+      logger.info(`✅ Healthcare provider synced to clinic database for: ${result.user.email}`);
     } catch (provisioningError) {
       logger.error(`⚠️ Clinic provisioning failed but registration continues:`, provisioningError.message);
       // Don't fail registration if provisioning fails - can retry later

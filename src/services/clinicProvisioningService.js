@@ -140,6 +140,78 @@ class ClinicProvisioningService {
   }
 
   /**
+   * Create healthcare provider in clinic database
+   * This syncs the user from the central database to the clinic-specific database
+   * @param {String} dbName - Clinic database name
+   * @param {String} dbUser - Database user
+   * @param {String} dbPassword - Database password
+   * @param {String} dbHost - Database host
+   * @param {Number} dbPort - Database port
+   * @param {String} clinicId - Clinic UUID (maps to facility_id in clinic DB)
+   * @param {Object} userData - User data from central database
+   */
+  async createHealthcareProviderInClinic(dbName, dbUser, dbPassword, dbHost, dbPort, clinicId, userData) {
+    try {
+      // Create a temporary connection to the clinic database
+      const { Sequelize } = require('sequelize');
+      const clinicDb = new Sequelize({
+        host: dbHost,
+        port: dbPort,
+        database: dbName,
+        username: dbUser,
+        password: dbPassword,
+        dialect: 'postgres',
+        logging: false,
+        pool: {
+          max: 5,
+          min: 0,
+          acquire: 30000,
+          idle: 10000
+        }
+      });
+
+      // Create a basic healthcare provider record (without full model definition)
+      // The healthcare_providers table is created by migrations
+      const insertSql = `
+        INSERT INTO healthcare_providers (
+          id, facility_id, email, password_hash, first_name, last_name,
+          profession, role, is_active, email_verified, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT (email) DO NOTHING;
+      `;
+
+      await clinicDb.query(insertSql, {
+        bind: [
+          userData.id,                           // id
+          clinicId,                              // facility_id
+          userData.email,                        // email
+          userData.password_hash,                // password_hash
+          userData.first_name || userData.firstName || 'User',  // first_name
+          userData.last_name || userData.lastName || '',        // last_name
+          'practitioner',                        // profession (default)
+          userData.role || 'practitioner',       // role
+          true,                                  // is_active
+          userData.email_verified || false       // email_verified
+        ]
+      });
+
+      await clinicDb.close();
+      logger.info(`✅ Healthcare provider created in clinic database: ${dbName}`, {
+        clinicId,
+        userId: userData.id,
+        email: userData.email
+      });
+
+      return true;
+    } catch (error) {
+      logger.warn(`⚠️ Failed to create healthcare provider in clinic DB: ${error.message}`);
+      // Don't throw - allow registration to continue even if provider creation fails
+      // User can still be created in clinic DB manually
+      return false;
+    }
+  }
+
+  /**
    * Verify clinic database is accessible
    */
   async verifyClinicDatabase(clinicId) {
