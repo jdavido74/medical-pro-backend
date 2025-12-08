@@ -40,8 +40,8 @@ const weeklyAvailabilitySchema = Joi.object({
 
 // CREATE Healthcare Provider
 module.exports.createHealthcareProviderSchema = Joi.object({
-  facility_id: Joi.string().uuid().required().messages({
-    'any.required': 'L\'établissement est obligatoire / El establecimiento es obligatorio',
+  // facility_id is optional - will be set from req.clinicId (authentication context)
+  facility_id: Joi.string().uuid().optional().messages({
     'string.guid': 'ID d\'établissement invalide / ID de establecimiento inválido'
   }),
 
