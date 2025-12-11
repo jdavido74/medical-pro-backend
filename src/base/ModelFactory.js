@@ -3,36 +3,33 @@
  *
  * Purpose: Initialize and cache model instances for each clinic database
  *
- * Sequelize requires models to be defined with a specific database instance.
- * This factory ensures we have the right model version for each clinic's database.
+ * ARCHITECTURE:
+ * - Central DB: Uses BaseModel-based models (with company_id, deleted_at)
+ * - Clinic DBs: Uses ClinicBaseModel-based models (with facility_id, different schemas)
+ *
+ * This factory ensures we use the correct model type for each database type.
  *
  * Usage:
- * // In route handler:
- * const patientModel = await ModelFactory.getModel(req.clinicDb, 'Patient');
- * const patients = await patientModel.findAll();
+ * // In route handler with clinic DB:
+ * const Patient = await ModelFactory.getModel(req.clinicDb, 'Patient');
+ * const patients = await Patient.findAll();
  */
 
-const Patient = require('../models/Patient');
-const Practitioner = require('../models/Practitioner');
-const Appointment = require('../models/Appointment');
-const AppointmentItem = require('../models/AppointmentItem');
-const Document = require('../models/Document');
-const Consent = require('../models/Consent');
-const ConsentTemplate = require('../models/ConsentTemplate');
-const Category = require('../models/Category');
-const ProductService = require('../models/ProductService');
+// Clinic-specific model factories
+const createClinicPatient = require('../models/clinic/Patient');
+const createClinicAppointment = require('../models/clinic/Appointment');
+const createClinicHealthcareProvider = require('../models/clinic/HealthcareProvider');
+const createClinicMedicalRecord = require('../models/clinic/MedicalRecord');
+const createClinicPrescription = require('../models/clinic/Prescription');
 
-// Map of model names to model classes
-const MODEL_MAP = {
-  Patient,
-  Practitioner,
-  Appointment,
-  AppointmentItem,
-  Document,
-  Consent,
-  ConsentTemplate,
-  Category,
-  ProductService
+// Map of clinic model names to their factory functions
+const CLINIC_MODEL_FACTORIES = {
+  Patient: createClinicPatient,
+  Appointment: createClinicAppointment,
+  Practitioner: createClinicHealthcareProvider, // Map Practitioner → HealthcareProvider for clinics
+  HealthcareProvider: createClinicHealthcareProvider,
+  MedicalRecord: createClinicMedicalRecord,
+  Prescription: createClinicPrescription
 };
 
 // Cache for initialized models per database
@@ -53,8 +50,10 @@ async function getModel(clinicDb, modelName) {
     throw new Error('clinicDb is required');
   }
 
-  if (!MODEL_MAP[modelName]) {
-    throw new Error(`Model '${modelName}' not found. Available models: ${Object.keys(MODEL_MAP).join(', ')}`);
+  if (!CLINIC_MODEL_FACTORIES[modelName]) {
+    throw new Error(
+      `Model '${modelName}' not found. Available models: ${Object.keys(CLINIC_MODEL_FACTORIES).join(', ')}`
+    );
   }
 
   // Check if we've already initialized models for this database
@@ -69,14 +68,18 @@ async function getModel(clinicDb, modelName) {
     return dbModels[modelName];
   }
 
-  // Initialize model for this database
-  const ModelClass = MODEL_MAP[modelName];
-  const initializedModel = await ModelClass.associate(clinicDb);
+  // Get the factory function for this clinic model
+  const modelFactory = CLINIC_MODEL_FACTORIES[modelName];
+
+  // Create the model using the factory (passes clinicDb connection)
+  const model = modelFactory(clinicDb);
 
   // Cache it
-  dbModels[modelName] = initializedModel;
+  dbModels[modelName] = model;
 
-  return initializedModel;
+  console.log(`[ModelFactory] ✅ Created clinic model '${modelName}' for database`);
+
+  return model;
 }
 
 /**
@@ -96,7 +99,7 @@ async function getAllModels(clinicDb) {
 
   const models = {};
 
-  for (const [modelName] of Object.entries(MODEL_MAP)) {
+  for (const modelName of Object.keys(CLINIC_MODEL_FACTORIES)) {
     models[modelName] = await getModel(clinicDb, modelName);
   }
 
@@ -110,6 +113,7 @@ async function getAllModels(clinicDb) {
 function clearCache(clinicDb) {
   if (modelCache.has(clinicDb)) {
     modelCache.delete(clinicDb);
+    console.log('[ModelFactory] Cache cleared for database');
   }
 }
 
@@ -117,8 +121,16 @@ function clearCache(clinicDb) {
  * Clear all cached models
  */
 function clearAllCache() {
-  // WeakMap has no clear() method, so we'll just create a new Map
-  // This naturally garbage collects old connections
+  // WeakMap doesn't have a clear method
+  // Models will be garbage collected when database connections are closed
+  console.log('[ModelFactory] All caches will be garbage collected');
+}
+
+/**
+ * Get list of available model names
+ */
+function getAvailableModels() {
+  return Object.keys(CLINIC_MODEL_FACTORIES);
 }
 
 module.exports = {
@@ -126,5 +138,5 @@ module.exports = {
   getAllModels,
   clearCache,
   clearAllCache,
-  MODEL_MAP
+  getAvailableModels
 };

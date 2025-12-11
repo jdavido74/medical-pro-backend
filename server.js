@@ -28,10 +28,20 @@ const appointmentItemRoutes = require('./src/routes/appointment-items');
 const documentRoutes = require('./src/routes/documents');
 const consentRoutes = require('./src/routes/consents');
 const consentTemplateRoutes = require('./src/routes/consent-templates');
+const medicalRecordsRoutes = require('./src/routes/medical-records');
+const prescriptionsRoutes = require('./src/routes/prescriptions');
+
+// Clinic configuration routes
+const healthcareProvidersRoutes = require('./src/routes/healthcareProviders');
+const clinicSettingsRoutes = require('./src/routes/clinicSettings');
+const clinicRolesRoutes = require('./src/routes/clinicRoles');
+const facilitiesRoutes = require('./src/routes/facilities');
+const profileRoutes = require('./src/routes/profile');
 
 // Import middleware
 const errorHandler = require('./src/middleware/errorHandler');
 const { authMiddleware } = require('./src/middleware/auth');
+const { clinicStatusMiddleware } = require('./src/middleware/clinicStatus');
 const { clinicRoutingMiddleware } = require('./src/middleware/clinicRouting');
 const { regionMiddleware } = require('./src/utils/regionDetector');
 
@@ -47,6 +57,14 @@ const rateLimiter = new RateLimiterMemory({
 });
 
 const rateLimitMiddleware = async (req, res, next) => {
+  // Skip rate limiting for localhost in development
+  const isDevelopment = process.env.NODE_ENV !== 'production';
+  const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
+
+  if (isDevelopment && isLocalhost) {
+    return next();
+  }
+
   try {
     await rateLimiter.consume(req.ip);
     next();
@@ -114,7 +132,8 @@ app.get('/health', (req, res) => {
 app.use(`/api/${API_VERSION}/auth`, authRoutes);
 
 // Apply clinic routing middleware to all clinic-specific routes
-// This middleware extracts clinic_id from JWT and provides req.clinicDb
+// Middleware chain: auth -> clinicRouting (provides req.clinicDb)
+// NOTE: clinicStatusMiddleware TEMPORARILY DISABLED for debugging
 app.use(`/api/${API_VERSION}/clients`, authMiddleware, clinicRoutingMiddleware, clientRoutes);
 app.use(`/api/${API_VERSION}/invoices`, authMiddleware, clinicRoutingMiddleware, invoiceRoutes);
 app.use(`/api/${API_VERSION}/quotes`, authMiddleware, clinicRoutingMiddleware, quoteRoutes);
@@ -132,6 +151,15 @@ app.use(`/api/${API_VERSION}/appointment-items`, authMiddleware, clinicRoutingMi
 app.use(`/api/${API_VERSION}/documents`, authMiddleware, clinicRoutingMiddleware, documentRoutes);
 app.use(`/api/${API_VERSION}/consents`, authMiddleware, clinicRoutingMiddleware, consentRoutes);
 app.use(`/api/${API_VERSION}/consent-templates`, authMiddleware, clinicRoutingMiddleware, consentTemplateRoutes);
+app.use(`/api/${API_VERSION}/medical-records`, authMiddleware, clinicRoutingMiddleware, medicalRecordsRoutes);
+app.use(`/api/${API_VERSION}/prescriptions`, authMiddleware, clinicRoutingMiddleware, prescriptionsRoutes);
+
+// Clinic configuration API routes (all use clinic-specific databases)
+app.use(`/api/${API_VERSION}/healthcare-providers`, healthcareProvidersRoutes);
+app.use(`/api/${API_VERSION}/clinic-settings`, clinicSettingsRoutes);
+app.use(`/api/${API_VERSION}/clinic-roles`, clinicRolesRoutes);
+app.use(`/api/${API_VERSION}/facilities`, facilitiesRoutes);
+app.use(`/api/${API_VERSION}/profile`, profileRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
@@ -165,13 +193,16 @@ const startServer = async () => {
     await initializeCentralConnection();
     logger.info('✅ Central database initialized');
 
-    // Test database connection (to first clinic)
+    // Test database connection (to central database)
     await testConnection();
 
-    // Sync database in development
-    if (process.env.NODE_ENV === 'development') {
-      await syncDatabase();
-    }
+    // NOTE: Database sync is disabled because:
+    // 1. Central DB tables are created via migrations
+    // 2. Clinic DB tables are created via provisioning service
+    // 3. Sync would try to create clinic models in central DB (incorrect)
+    // if (process.env.NODE_ENV === 'development') {
+    //   await syncDatabase();
+    // }
 
     // Start server
     const server = app.listen(PORT, () => {
