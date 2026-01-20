@@ -1,0 +1,610 @@
+/**
+ * Medical Records Routes - Clinic Isolated
+ * CRUD operations for medical records with clinic-specific database isolation
+ *
+ * Compliance: RGPD, Secret Médical (Art. L1110-4 CSP)
+ * - Full audit trail for all access
+ * - Permission-based access control
+ * - Medical data protected by healthcare professional permissions
+ */
+
+const express = require('express');
+const Joi = require('joi');
+const { Op } = require('sequelize');
+const { getModel } = require('../base/ModelFactory');
+const schemas = require('../base/validationSchemas');
+const { PERMISSIONS, getPermissionsForRole } = require('../utils/permissionConstants');
+const { getPermissionsFromClinicRoles } = require('../middleware/permissions');
+
+const router = express.Router();
+
+/**
+ * Helper: Get healthcare_provider.id from central user id
+ */
+async function getProviderIdFromUser(clinicDb, centralUserId) {
+  const HealthcareProvider = await getModel(clinicDb, 'HealthcareProvider');
+  const provider = await HealthcareProvider.findOne({
+    where: { central_user_id: centralUserId },
+    attributes: ['id']
+  });
+  return provider?.id || null;
+}
+
+// Validation schema for query parameters
+const querySchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+  search: Joi.string().max(255).allow('').optional(),
+  patient_id: Joi.string().uuid().optional(),
+  provider_id: Joi.string().uuid().optional(),
+  record_type: Joi.string().valid('consultation', 'examination', 'treatment', 'follow_up', 'emergency', 'prescription', 'lab_result', 'imaging', 'note').optional(),
+  date_from: Joi.date().iso().optional(),
+  date_to: Joi.date().iso().optional(),
+  archived: Joi.boolean().optional()
+});
+
+/**
+ * Check if user has permission to access medical records
+ * Now uses clinic_roles table as source of truth
+ */
+async function hasPermission(req, permission) {
+  const user = req.user;
+  if (!user) return false;
+  if (user.role === 'super_admin') return true;
+
+  // Get permissions from clinic_roles (source of truth)
+  const rolePermissions = await getPermissionsFromClinicRoles(user.companyId, user.role);
+  return rolePermissions.includes(permission);
+}
+
+/**
+ * Log access to medical record (RGPD compliance)
+ */
+async function logRecordAccess(record, action, user, req, details = {}) {
+  try {
+    const clientIP = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    await record.logAccess(action, user?.userId || user?.id || 'unknown', clientIP, details);
+  } catch (error) {
+    console.error('[MedicalRecords] Error logging access:', error.message);
+  }
+}
+
+/**
+ * GET /
+ * Retrieve all medical records with pagination and filters
+ * Requires: medical_records.view permission
+ */
+router.get('/', async (req, res, next) => {
+  try {
+    // Check permission
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Accès refusé',
+          details: 'Vous n\'avez pas la permission de consulter les dossiers médicaux'
+        }
+      });
+    }
+
+    // Validate query params
+    const { error, value: params } = querySchema.validate(req.query);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Paramètres invalides',
+          details: error.details.map(d => d.message).join(', ')
+        }
+      });
+    }
+
+    const { page, limit, search, patient_id, provider_id, record_type, date_from, date_to, archived } = params;
+
+    // Get model
+    const MedicalRecord = await getModel(req.clinicDb, 'MedicalRecord');
+
+    // Build where clause
+    const where = {};
+
+    // Filter archived (default: show only non-archived)
+    where.archived = archived === true;
+
+    // Filter by patient
+    if (patient_id) {
+      where.patient_id = patient_id;
+    }
+
+    // Filter by provider
+    if (provider_id) {
+      where.provider_id = provider_id;
+    }
+
+    // Filter by record type
+    if (record_type) {
+      where.record_type = record_type;
+    }
+
+    // Filter by date range
+    if (date_from || date_to) {
+      where.created_at = {};
+      if (date_from) where.created_at[Op.gte] = new Date(date_from);
+      if (date_to) where.created_at[Op.lte] = new Date(date_to);
+    }
+
+    // Search in chief_complaint, notes
+    if (search) {
+      where[Op.or] = [
+        { chief_complaint: { [Op.iLike]: `%${search}%` } },
+        { notes: { [Op.iLike]: `%${search}%` } }
+      ];
+    }
+
+    // Execute query with pagination
+    const offset = (page - 1) * limit;
+    const { count, rows } = await MedicalRecord.findAndCountAll({
+      where,
+      limit,
+      offset,
+      order: [['created_at', 'DESC']]
+    });
+
+    res.json({
+      success: true,
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        total: count,
+        pages: Math.ceil(count / limit),
+        hasNextPage: page < Math.ceil(count / limit),
+        hasPrevPage: page > 1
+      }
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] GET / error:', error);
+    next(error);
+  }
+});
+
+/**
+ * GET /patient/:patientId
+ * Get all medical records for a specific patient
+ * Requires: medical_records.view permission
+ */
+router.get('/patient/:patientId', async (req, res, next) => {
+  try {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Accès refusé',
+          details: 'Vous n\'avez pas la permission de consulter les dossiers médicaux'
+        }
+      });
+    }
+
+    const { patientId } = req.params;
+    const MedicalRecord = await getModel(req.clinicDb, 'MedicalRecord');
+
+    const history = await MedicalRecord.getPatientHistory(patientId);
+
+    res.json({
+      success: true,
+      data: history.records,
+      statistics: history.statistics,
+      activeTreatments: history.activeTreatments,
+      allergies: history.allergies,
+      byType: history.byType
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] GET /patient/:patientId error:', error);
+    next(error);
+  }
+});
+
+/**
+ * GET /statistics
+ * Get medical records statistics
+ * Requires: medical_records.view permission
+ */
+router.get('/statistics', async (req, res, next) => {
+  try {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Accès refusé' }
+      });
+    }
+
+    const MedicalRecord = await getModel(req.clinicDb, 'MedicalRecord');
+
+    const now = new Date();
+    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const thisYear = new Date(now.getFullYear(), 0, 1);
+
+    // Total records
+    const total = await MedicalRecord.count({ where: { archived: false } });
+    const thisMonthCount = await MedicalRecord.count({
+      where: {
+        archived: false,
+        created_at: { [Op.gte]: thisMonth }
+      }
+    });
+    const thisYearCount = await MedicalRecord.count({
+      where: {
+        archived: false,
+        created_at: { [Op.gte]: thisYear }
+      }
+    });
+
+    // By type
+    const byType = {};
+    const types = ['consultation', 'examination', 'treatment', 'follow_up', 'emergency', 'prescription', 'lab_result', 'imaging', 'note'];
+    for (const type of types) {
+      byType[type] = await MedicalRecord.count({
+        where: { archived: false, record_type: type }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        total,
+        thisMonth: thisMonthCount,
+        thisYear: thisYearCount,
+        byType
+      }
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] GET /statistics error:', error);
+    next(error);
+  }
+});
+
+/**
+ * GET /:id
+ * Retrieve a single medical record by ID
+ * Requires: medical_records.view permission
+ */
+router.get('/:id', async (req, res, next) => {
+  try {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Accès refusé',
+          details: 'Vous n\'avez pas la permission de consulter les dossiers médicaux'
+        }
+      });
+    }
+
+    const MedicalRecord = await getModel(req.clinicDb, 'MedicalRecord');
+    const record = await MedicalRecord.findByPk(req.params.id);
+
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: 'Dossier médical non trouvé',
+          details: 'Aucun dossier médical avec cet identifiant'
+        }
+      });
+    }
+
+    // Log access (RGPD compliance)
+    await logRecordAccess(record, 'view', req.user, req);
+
+    res.json({
+      success: true,
+      data: record
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] GET /:id error:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /
+ * Create a new medical record
+ * Requires: medical_records.view + medical_notes.create or medical_records.edit permission
+ */
+router.post('/', async (req, res, next) => {
+  try {
+    const canCreate = await hasPermission(req, PERMISSIONS.MEDICAL_NOTES_CREATE) ||
+                      await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_EDIT);
+
+    if (!canCreate) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Accès refusé',
+          details: 'Vous n\'avez pas la permission de créer des dossiers médicaux'
+        }
+      });
+    }
+
+    // Validate request body
+    const { error, value: data } = schemas.createMedicalRecordSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Données invalides',
+          details: error.details.map(d => d.message).join(', ')
+        }
+      });
+    }
+
+    const MedicalRecord = await getModel(req.clinicDb, 'MedicalRecord');
+
+    // Auto-fill facility_id if not provided
+    if (!data.facility_id) {
+      try {
+        const [facilities] = await req.clinicDb.query(
+          `SELECT id FROM medical_facilities WHERE is_active = true LIMIT 1`
+        );
+        if (facilities && facilities.length > 0) {
+          data.facility_id = facilities[0].id;
+        } else if (req.user.companyId) {
+          data.facility_id = req.user.companyId;
+        }
+      } catch (err) {
+        if (req.user.companyId) {
+          data.facility_id = req.user.companyId;
+        }
+      }
+    }
+
+    // Set provider if not specified - use healthcare_provider.id, not central user id
+    if (!data.provider_id && req.user?.id) {
+      const providerId = await getProviderIdFromUser(req.clinicDb, req.user.id);
+      if (providerId) {
+        data.provider_id = providerId;
+      }
+    }
+
+    // Set created_by - also use provider_id for consistency
+    if (!data.created_by && req.user?.id) {
+      const providerId = await getProviderIdFromUser(req.clinicDb, req.user.id);
+      data.created_by = providerId || req.user.id;
+    }
+
+    // Check medication interactions
+    if (data.treatments && data.treatments.length > 0) {
+      data.medication_warnings = MedicalRecord.checkMedicationInteractions(data.treatments);
+    }
+
+    // Initial access log
+    const clientIP = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    data.access_log = [{
+      action: 'create',
+      userId: req.user?.id || 'unknown',
+      timestamp: new Date().toISOString(),
+      ipAddress: clientIP
+    }];
+
+    // Create record
+    const record = await MedicalRecord.create(data);
+
+    console.log(`[MedicalRecords] ✅ Created record ${record.id} for patient ${data.patient_id}`);
+
+    res.status(201).json({
+      success: true,
+      data: record,
+      message: 'Dossier médical créé avec succès'
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] POST / error:', error);
+    next(error);
+  }
+});
+
+/**
+ * PUT /:id
+ * Update a medical record
+ * Requires: medical_records.edit permission
+ */
+router.put('/:id', async (req, res, next) => {
+  try {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_EDIT)) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Accès refusé',
+          details: 'Vous n\'avez pas la permission de modifier les dossiers médicaux'
+        }
+      });
+    }
+
+    const MedicalRecord = await getModel(req.clinicDb, 'MedicalRecord');
+    const record = await MedicalRecord.findByPk(req.params.id);
+
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: 'Dossier médical non trouvé'
+        }
+      });
+    }
+
+    // Check if record can be modified
+    if (!record.canBeModified()) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Modification impossible',
+          details: 'Ce dossier est verrouillé ou archivé'
+        }
+      });
+    }
+
+    // Validate request body
+    const { error, value: data } = schemas.updateMedicalRecordSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Données invalides',
+          details: error.details.map(d => d.message).join(', ')
+        }
+      });
+    }
+
+    // Check medication interactions if treatments updated
+    if (data.treatments) {
+      data.medication_warnings = MedicalRecord.checkMedicationInteractions(data.treatments);
+    }
+
+    // Update record
+    await record.update(data);
+
+    // Log access
+    await logRecordAccess(record, 'update', req.user, req, { fields: Object.keys(data) });
+
+    console.log(`[MedicalRecords] ✅ Updated record ${record.id}`);
+
+    res.json({
+      success: true,
+      data: record,
+      message: 'Dossier médical mis à jour'
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] PUT /:id error:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /:id/sign
+ * Sign and lock a medical record
+ * Requires: medical_records.edit permission
+ */
+router.post('/:id/sign', async (req, res, next) => {
+  try {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_EDIT)) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Accès refusé' }
+      });
+    }
+
+    const MedicalRecord = await getModel(req.clinicDb, 'MedicalRecord');
+    const record = await MedicalRecord.findByPk(req.params.id);
+
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Dossier médical non trouvé' }
+      });
+    }
+
+    if (record.is_signed) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Ce dossier est déjà signé' }
+      });
+    }
+
+    // Get healthcare_provider.id instead of central user id
+    const providerId = await getProviderIdFromUser(req.clinicDb, req.user?.id);
+
+    await record.sign(providerId);
+    await logRecordAccess(record, 'sign', req.user, req);
+
+    res.json({
+      success: true,
+      data: record,
+      message: 'Dossier signé et verrouillé'
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] POST /:id/sign error:', error);
+    next(error);
+  }
+});
+
+/**
+ * DELETE /:id
+ * Archive a medical record (soft delete)
+ * Requires: medical_records.delete permission
+ */
+router.delete('/:id', async (req, res, next) => {
+  try {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_DELETE)) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Accès refusé',
+          details: 'Vous n\'avez pas la permission de supprimer les dossiers médicaux'
+        }
+      });
+    }
+
+    const MedicalRecord = await getModel(req.clinicDb, 'MedicalRecord');
+    const record = await MedicalRecord.findByPk(req.params.id);
+
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Dossier médical non trouvé' }
+      });
+    }
+
+    // Archive (soft delete) - use healthcare_provider.id
+    const providerId = await getProviderIdFromUser(req.clinicDb, req.user?.id);
+    await record.archive(providerId);
+    await logRecordAccess(record, 'archive', req.user, req);
+
+    console.log(`[MedicalRecords] 🗑️ Archived record ${record.id}`);
+
+    res.json({
+      success: true,
+      message: 'Dossier médical archivé'
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] DELETE /:id error:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /:id/restore
+ * Restore an archived medical record
+ * Requires: medical_records.delete permission
+ */
+router.post('/:id/restore', async (req, res, next) => {
+  try {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_DELETE)) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Accès refusé' }
+      });
+    }
+
+    const MedicalRecord = await getModel(req.clinicDb, 'MedicalRecord');
+    const record = await MedicalRecord.findByPk(req.params.id);
+
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Dossier médical non trouvé' }
+      });
+    }
+
+    await record.unarchive();
+    await logRecordAccess(record, 'restore', req.user, req);
+
+    res.json({
+      success: true,
+      data: record,
+      message: 'Dossier médical restauré'
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] POST /:id/restore error:', error);
+    next(error);
+  }
+});
+
+module.exports = router;
