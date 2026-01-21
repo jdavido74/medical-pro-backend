@@ -25,6 +25,30 @@ const express = require('express');
 const { logger } = require('../utils/logger');
 const { Op } = require('sequelize');
 const { getModel } = require('./ModelFactory');
+const { getPermissionsFromClinicRoles } = require('../middleware/permissions');
+
+/**
+ * Helper: Check if user has a specific permission
+ * Uses clinic_roles as source of truth
+ */
+async function checkPermission(req, permission) {
+  if (!permission) return true; // No permission required
+  if (!req.user) return false;
+  if (req.user.role === 'super_admin') return true;
+
+  const rolePermissions = await getPermissionsFromClinicRoles(req.user.companyId, req.user.role);
+  const hasPermission = rolePermissions.includes(permission);
+
+  if (!hasPermission) {
+    logger.debug(`[clinicCrudRoutes] Permission denied`, {
+      permission,
+      userRole: req.user.role,
+      userId: req.user.id
+    });
+  }
+
+  return hasPermission;
+}
 
 function createClinicCrudRoutes(modelName, config = {}) {
   const router = express.Router();
@@ -39,7 +63,17 @@ function createClinicCrudRoutes(modelName, config = {}) {
     onBeforeUpdate = null,
     onAfterCreate = null,
     onAfterUpdate = null,
-    onAfterDelete = null
+    onAfterDelete = null,
+    // Permission configuration
+    permissions = {
+      view: null,      // Permission required for GET
+      create: null,    // Permission required for POST
+      update: null,    // Permission required for PUT
+      delete: null     // Permission required for DELETE
+    },
+    // Relations to include in queries (function that receives clinicDb and returns include array)
+    // Example: includeRelations: async (clinicDb) => [{ model: await getModel(clinicDb, 'Patient'), as: 'patient' }]
+    includeRelations = null
   } = config;
 
   /**
@@ -48,6 +82,17 @@ function createClinicCrudRoutes(modelName, config = {}) {
    */
   router.get('/', async (req, res, next) => {
     try {
+      // Check view permission
+      if (permissions.view && !(await checkPermission(req, permissions.view))) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Permission denied',
+            details: `Required permission: ${permissions.view}`
+          }
+        });
+      }
+
       // Validate parameters
       let params = { page: 1, limit: 20, ...req.query };
       if (querySchema) {
@@ -70,7 +115,16 @@ function createClinicCrudRoutes(modelName, config = {}) {
       const Model = await getModel(req.clinicDb, modelName);
 
       // Build where clause - NO company_id needed (DB is already isolated!)
-      const where = { ...filters, deletedAt: null };
+      // Note: Clinic models have different soft delete mechanisms (archived, or none)
+      const where = { ...filters };
+
+      // Filter archived records if model has archived field
+      if (Model.rawAttributes.archived) {
+        // Only show non-archived records unless explicitly requesting archived ones
+        if (!filters.hasOwnProperty('archived')) {
+          where.archived = false;
+        }
+      }
 
       // Add search if provided
       if (search && searchFields.length > 0) {
@@ -81,13 +135,26 @@ function createClinicCrudRoutes(modelName, config = {}) {
 
       // Retrieve with pagination
       const offset = (page - 1) * limit;
-      const { count, rows } = await Model.findAndCountAll({
+
+      // Build query options
+      const queryOptions = {
         where,
         limit,
         offset,
-        order: [['createdAt', 'DESC']],
+        order: [['created_at', 'DESC']],
         subQuery: false
-      });
+      };
+
+      // Add relations if configured
+      if (includeRelations) {
+        try {
+          queryOptions.include = await includeRelations(req.clinicDb);
+        } catch (includeErr) {
+          logger.warn(`Could not load relations for ${modelName}:`, includeErr.message);
+        }
+      }
+
+      const { count, rows } = await Model.findAndCountAll(queryOptions);
 
       res.json({
         success: true,
@@ -112,11 +179,20 @@ function createClinicCrudRoutes(modelName, config = {}) {
    */
   router.get('/:id', async (req, res, next) => {
     try {
+      // Check view permission
+      if (permissions.view && !(await checkPermission(req, permissions.view))) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Permission denied',
+            details: `Required permission: ${permissions.view}`
+          }
+        });
+      }
+
       const Model = await getModel(req.clinicDb, modelName);
 
-      const item = await Model.findByPk(req.params.id, {
-        where: { deletedAt: null }
-      });
+      const item = await Model.findByPk(req.params.id);
 
       if (!item) {
         return res.status(404).json({
@@ -143,11 +219,25 @@ function createClinicCrudRoutes(modelName, config = {}) {
    */
   router.post('/', async (req, res, next) => {
     try {
+      // Check create permission
+      if (permissions.create && !(await checkPermission(req, permissions.create))) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Permission denied',
+            details: `Required permission: ${permissions.create}`
+          }
+        });
+      }
+
       // Validate data
       let validatedData = req.body;
       if (createSchema) {
         const { error, value } = createSchema.validate(req.body);
         if (error) {
+          logger.warn(`[${modelName}] Validation error:`, {
+            details: error.details.map(d => d.message)
+          });
           return res.status(400).json({
             success: false,
             error: {
@@ -197,13 +287,22 @@ function createClinicCrudRoutes(modelName, config = {}) {
    */
   router.put('/:id', async (req, res, next) => {
     try {
+      // Check update permission
+      if (permissions.update && !(await checkPermission(req, permissions.update))) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Permission denied',
+            details: `Required permission: ${permissions.update}`
+          }
+        });
+      }
+
       // Get clinic-specific model
       const Model = await getModel(req.clinicDb, modelName);
 
       // Check that record exists
-      const item = await Model.findByPk(req.params.id, {
-        where: { deletedAt: null }
-      });
+      const item = await Model.findByPk(req.params.id);
 
       if (!item) {
         return res.status(404).json({
@@ -266,13 +365,22 @@ function createClinicCrudRoutes(modelName, config = {}) {
    */
   router.delete('/:id', async (req, res, next) => {
     try {
+      // Check delete permission
+      if (permissions.delete && !(await checkPermission(req, permissions.delete))) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Permission denied',
+            details: `Required permission: ${permissions.delete}`
+          }
+        });
+      }
+
       // Get clinic-specific model
       const Model = await getModel(req.clinicDb, modelName);
 
       // Check that record exists
-      const item = await Model.findByPk(req.params.id, {
-        where: { deletedAt: null }
-      });
+      const item = await Model.findByPk(req.params.id);
 
       if (!item) {
         return res.status(404).json({
@@ -284,8 +392,16 @@ function createClinicCrudRoutes(modelName, config = {}) {
         });
       }
 
-      // Soft delete
-      await item.update({ deletedAt: new Date() });
+      // Soft delete - model-specific
+      // Patients use 'archived', Appointments have no soft delete
+      if (item.archive) {
+        await item.archive();
+      } else if (item.softDelete) {
+        await item.softDelete();
+      } else {
+        // Hard delete if no soft delete mechanism
+        await item.destroy();
+      }
 
       // Hook after delete
       if (onAfterDelete) {
@@ -327,7 +443,6 @@ function createClinicCrudRoutes(modelName, config = {}) {
 
       // Build where clause
       const where = {
-        deletedAt: null,
         ...filters,
         [Op.or]: searchFields.map(field => ({
           [field]: { [Op.iLike]: `%${search}%` }
@@ -340,7 +455,7 @@ function createClinicCrudRoutes(modelName, config = {}) {
         where,
         limit,
         offset,
-        order: [['createdAt', 'DESC']],
+        order: [['created_at', 'DESC']],
         subQuery: false
       });
 

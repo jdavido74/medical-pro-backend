@@ -13,6 +13,8 @@ const Joi = require('joi');
 const { Op } = require('sequelize');
 const { getModel } = require('../base/ModelFactory');
 const { PERMISSIONS, getPermissionsForRole } = require('../utils/permissionConstants');
+const { validateParams, validateQuery, schemas } = require('../utils/validationSchemas');
+const { getPermissionsFromClinicRoles } = require('../middleware/permissions');
 
 const router = express.Router();
 
@@ -64,11 +66,15 @@ const updatePrescriptionSchema = Joi.object({
 
 /**
  * Check if user has permission
+ * Now uses clinic_roles table as source of truth
  */
-function hasPermission(user, permission) {
+async function hasPermission(req, permission) {
+  const user = req.user;
   if (!user) return false;
   if (user.role === 'super_admin') return true;
-  const rolePermissions = getPermissionsForRole(user.role);
+
+  // Get permissions from clinic_roles (source of truth)
+  const rolePermissions = await getPermissionsFromClinicRoles(user.companyId, user.role);
   return rolePermissions.includes(permission);
 }
 
@@ -90,7 +96,7 @@ async function logPrescriptionAccess(prescription, action, user, req, details = 
  */
 router.get('/', async (req, res, next) => {
   try {
-    if (!hasPermission(req.user, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
       return res.status(403).json({
         success: false,
         error: { message: 'Accès refusé aux ordonnances' }
@@ -138,9 +144,9 @@ router.get('/', async (req, res, next) => {
  * GET /patient/:patientId
  * Get all prescriptions for a patient
  */
-router.get('/patient/:patientId', async (req, res, next) => {
+router.get('/patient/:patientId', validateParams(schemas.patientIdParam), async (req, res, next) => {
   try {
-    if (!hasPermission(req.user, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
       return res.status(403).json({
         success: false,
         error: { message: 'Accès refusé' }
@@ -168,7 +174,7 @@ router.get('/patient/:patientId', async (req, res, next) => {
  */
 router.get('/medical-record/:medicalRecordId', async (req, res, next) => {
   try {
-    if (!hasPermission(req.user, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
       return res.status(403).json({
         success: false,
         error: { message: 'Accès refusé' }
@@ -196,7 +202,7 @@ router.get('/medical-record/:medicalRecordId', async (req, res, next) => {
  */
 router.get('/:id', async (req, res, next) => {
   try {
-    if (!hasPermission(req.user, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
       return res.status(403).json({
         success: false,
         error: { message: 'Accès refusé' }
@@ -232,8 +238,8 @@ router.get('/:id', async (req, res, next) => {
  */
 router.post('/', async (req, res, next) => {
   try {
-    const canCreate = hasPermission(req.user, PERMISSIONS.MEDICAL_NOTES_CREATE) ||
-                      hasPermission(req.user, PERMISSIONS.MEDICAL_RECORDS_EDIT);
+    const canCreate = await hasPermission(req, PERMISSIONS.MEDICAL_NOTES_CREATE) ||
+                      await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_EDIT);
 
     if (!canCreate) {
       return res.status(403).json({
@@ -311,7 +317,7 @@ router.post('/', async (req, res, next) => {
  */
 router.put('/:id', async (req, res, next) => {
   try {
-    if (!hasPermission(req.user, PERMISSIONS.MEDICAL_RECORDS_EDIT)) {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_EDIT)) {
       return res.status(403).json({
         success: false,
         error: { message: 'Accès refusé' }
@@ -364,7 +370,7 @@ router.put('/:id', async (req, res, next) => {
  */
 router.post('/:id/finalize', async (req, res, next) => {
   try {
-    if (!hasPermission(req.user, PERMISSIONS.MEDICAL_RECORDS_EDIT)) {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_EDIT)) {
       return res.status(403).json({
         success: false,
         error: { message: 'Accès refusé' }
@@ -401,7 +407,7 @@ router.post('/:id/finalize', async (req, res, next) => {
  */
 router.post('/:id/print', async (req, res, next) => {
   try {
-    if (!hasPermission(req.user, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
       return res.status(403).json({
         success: false,
         error: { message: 'Accès refusé' }
@@ -438,7 +444,7 @@ router.post('/:id/print', async (req, res, next) => {
  */
 router.delete('/:id', async (req, res, next) => {
   try {
-    if (!hasPermission(req.user, PERMISSIONS.MEDICAL_RECORDS_DELETE)) {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_DELETE)) {
       return res.status(403).json({
         success: false,
         error: { message: 'Accès refusé' }

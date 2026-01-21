@@ -30,13 +30,25 @@ const consentRoutes = require('./src/routes/consents');
 const consentTemplateRoutes = require('./src/routes/consent-templates');
 const medicalRecordsRoutes = require('./src/routes/medical-records');
 const prescriptionsRoutes = require('./src/routes/prescriptions');
+const consentSigningRoutes = require('./src/routes/consent-signing');
+
+// Public routes (no authentication)
+const publicConsentSigningRoutes = require('./src/routes/public-consent-signing');
 
 // Clinic configuration routes
 const healthcareProvidersRoutes = require('./src/routes/healthcareProviders');
 const clinicSettingsRoutes = require('./src/routes/clinicSettings');
 const clinicRolesRoutes = require('./src/routes/clinicRoles');
+const clinicSetupRoutes = require('./src/routes/clinicSetup');
 const facilitiesRoutes = require('./src/routes/facilities');
 const profileRoutes = require('./src/routes/profile');
+const practitionerAvailabilityRoutes = require('./src/routes/practitionerAvailability');
+const patientCareTeamRoutes = require('./src/routes/patientCareTeam');
+const teamsRoutes = require('./src/routes/teams');
+
+// User management routes (central database)
+const usersRoutes = require('./src/routes/users');
+const auditRoutes = require('./src/routes/audit');
 
 // Import middleware
 const errorHandler = require('./src/middleware/errorHandler');
@@ -128,6 +140,10 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Public routes (no authentication required)
+// Consent signing page for patients (accessed via email link)
+app.use(`/api/${API_VERSION}/public/sign`, publicConsentSigningRoutes);
+
 // API routes
 app.use(`/api/${API_VERSION}/auth`, authRoutes);
 
@@ -140,6 +156,9 @@ app.use(`/api/${API_VERSION}/quotes`, authMiddleware, clinicRoutingMiddleware, q
 app.use(`/api/${API_VERSION}/validation`, authMiddleware, clinicRoutingMiddleware, validationRoutes);
 // Admin routes use ONLY central database - super_admin should NOT use clinic routing
 app.use(`/api/${API_VERSION}/admin`, authMiddleware, adminRoutes);
+// User and audit routes use central database (company-scoped)
+app.use(`/api/${API_VERSION}/users`, usersRoutes);
+app.use(`/api/${API_VERSION}/audit`, auditRoutes);
 app.use(`/api/${API_VERSION}/products`, authMiddleware, clinicRoutingMiddleware, productRoutes);
 app.use(`/api/${API_VERSION}/categories`, authMiddleware, clinicRoutingMiddleware, categoryRoutes);
 
@@ -153,13 +172,18 @@ app.use(`/api/${API_VERSION}/consents`, authMiddleware, clinicRoutingMiddleware,
 app.use(`/api/${API_VERSION}/consent-templates`, authMiddleware, clinicRoutingMiddleware, consentTemplateRoutes);
 app.use(`/api/${API_VERSION}/medical-records`, authMiddleware, clinicRoutingMiddleware, medicalRecordsRoutes);
 app.use(`/api/${API_VERSION}/prescriptions`, authMiddleware, clinicRoutingMiddleware, prescriptionsRoutes);
+app.use(`/api/${API_VERSION}/consent-signing`, authMiddleware, clinicRoutingMiddleware, consentSigningRoutes);
 
 // Clinic configuration API routes (all use clinic-specific databases)
 app.use(`/api/${API_VERSION}/healthcare-providers`, healthcareProvidersRoutes);
 app.use(`/api/${API_VERSION}/clinic-settings`, clinicSettingsRoutes);
 app.use(`/api/${API_VERSION}/clinic-roles`, clinicRolesRoutes);
+app.use(`/api/${API_VERSION}/clinic`, clinicSetupRoutes); // Onboarding setup routes
 app.use(`/api/${API_VERSION}/facilities`, facilitiesRoutes);
 app.use(`/api/${API_VERSION}/profile`, profileRoutes);
+app.use(`/api/${API_VERSION}/availability`, practitionerAvailabilityRoutes);
+app.use(`/api/${API_VERSION}/care-team`, authMiddleware, clinicRoutingMiddleware, patientCareTeamRoutes);
+app.use(`/api/${API_VERSION}/teams`, teamsRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

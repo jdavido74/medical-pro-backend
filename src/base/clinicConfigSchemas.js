@@ -50,10 +50,10 @@ module.exports.createHealthcareProviderSchema = Joi.object({
     'any.required': 'L\'email est obligatoire / El email es obligatorio',
     'string.email': 'Format d\'email invalide / Formato de email inválido'
   }),
-  password_hash: Joi.string().min(6).required().messages({
-    'any.required': 'Le mot de passe est obligatoire / La contraseña es obligatoria',
+  password_hash: Joi.string().min(6).optional().messages({
     'string.min': 'Le mot de passe doit contenir au moins 6 caractères / La contraseña debe tener al menos 6 caracteres'
   }),
+  send_invitation: Joi.boolean().default(false), // Si true, envoie un email d'invitation au lieu de créer avec mot de passe
   first_name: Joi.string().min(2).max(100).trim().required().messages({
     'any.required': 'Le prénom est obligatoire / El nombre es obligatorio',
     'string.min': 'Le prénom doit contenir au moins 2 caractères / El nombre debe tener al menos 2 caracteres'
@@ -74,13 +74,20 @@ module.exports.createHealthcareProviderSchema = Joi.object({
   order_number: Joi.string().max(50).allow('').optional(),
 
   // Role and permissions
+  // Rôles standardisés: physician (médecins), practitioner (autres soignants), secretary, readonly
+  // Rôles système: super_admin, admin
   role: Joi.string()
-    .valid('super_admin', 'admin', 'practitioner', 'nurse', 'secretary', 'readonly')
+    .valid('super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly')
     .required()
     .messages({
       'any.required': 'Le rôle est obligatoire / El rol es obligatorio',
       'any.only': 'Rôle invalide / Rol inválido'
     }),
+  // Rôle administratif cumulable: direction, clinic_admin, hr, billing
+  administrative_role: Joi.string()
+    .valid('direction', 'clinic_admin', 'hr', 'billing')
+    .allow(null, '')
+    .optional(),
   permissions: Joi.object().default({}),
 
   // Contact
@@ -93,9 +100,18 @@ module.exports.createHealthcareProviderSchema = Joi.object({
   // UI
   color: Joi.string().max(20).default('blue'),
 
+  // Team assignment (for onboarding)
+  team_id: Joi.string().uuid().allow(null, '').optional(),
+
   // Status
   is_active: Joi.boolean().default(true),
-  email_verified: Joi.boolean().default(false)
+  email_verified: Joi.boolean().default(false),
+  account_status: Joi.string()
+    .valid('pending', 'active', 'suspended', 'locked')
+    .default('active')
+    .messages({
+      'any.only': 'Statut de compte invalide / Estado de cuenta inválido'
+    })
 });
 
 // UPDATE Healthcare Provider
@@ -115,9 +131,13 @@ module.exports.updateHealthcareProviderSchema = Joi.object({
   rpps: Joi.string().max(11).allow('').optional(),
   order_number: Joi.string().max(50).allow('').optional(),
 
-  // Role and permissions
+  // Role and permissions (standardized)
   role: Joi.string()
-    .valid('super_admin', 'admin', 'practitioner', 'nurse', 'secretary', 'readonly')
+    .valid('super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly')
+    .optional(),
+  administrative_role: Joi.string()
+    .valid('direction', 'clinic_admin', 'hr', 'billing')
+    .allow(null, '')
     .optional(),
   permissions: Joi.object().optional(),
 
@@ -351,10 +371,10 @@ module.exports.updateFacilitySchema = Joi.object({
   rpps: Joi.string().max(11).allow('').optional(),
 
   // Contact
-  address_line1: Joi.string().max(255).optional(),
+  address_line1: Joi.string().max(255).allow('').optional(),
   address_line2: Joi.string().max(255).allow('').optional(),
-  postal_code: Joi.string().max(10).optional(),
-  city: Joi.string().max(100).optional(),
+  postal_code: Joi.string().max(10).allow('').optional(),
+  city: Joi.string().max(100).allow('').optional(),
   country: Joi.string().max(2).default('FR'),
   phone: Joi.string().pattern(/^[\+]?[0-9\s\-\(\)]{8,20}$/).allow('').optional(),
   email: Joi.string().email().allow('').optional(),
@@ -380,6 +400,6 @@ module.exports.queryParamsSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
   search: Joi.string().max(255).allow('').optional(),
-  role: Joi.string().valid('super_admin', 'admin', 'practitioner', 'nurse', 'secretary', 'readonly').optional(),
+  role: Joi.string().valid('super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly').optional(),
   is_active: Joi.boolean().optional()
 });

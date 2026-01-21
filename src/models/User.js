@@ -10,7 +10,7 @@ const User = sequelize.define('User', {
   },
   company_id: {
     type: DataTypes.UUID,
-    allowNull: false,
+    allowNull: true, // Allow NULL for super_admin users who manage all companies
     references: {
       model: 'companies',
       key: 'id'
@@ -49,9 +49,10 @@ const User = sequelize.define('User', {
   role: {
     type: DataTypes.STRING(20),
     allowNull: false,
-    defaultValue: 'user',
+    defaultValue: 'admin',
     validate: {
-      isIn: [['super_admin', 'admin', 'doctor', 'secretary', 'readonly']]
+      // Standardized roles: physician, practitioner, secretary, readonly, admin, super_admin
+      isIn: [['super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly']]
     }
   },
   permissions: {

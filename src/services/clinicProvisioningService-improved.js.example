@@ -1,0 +1,203 @@
+/**
+ * AMÉLIORATION du ClinicProvisioningService
+ * Ajout de méthodes pour rollback et vérification
+ */
+
+class ClinicProvisioningService {
+
+  // ... (méthodes existantes)
+
+  /**
+   * Nettoyer une base clinic en cas d'échec de provisioning
+   * @param {String} clinicId - UUID de la clinic
+   */
+  async cleanupFailedProvisioning(clinicId) {
+    try {
+      const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
+      const dbUser = process.env.DB_USER || 'medicalpro';
+      const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+      const dbHost = process.env.DB_HOST || 'localhost';
+      const dbPort = process.env.DB_PORT || 5432;
+
+      logger.info(`🗑️ Cleaning up failed provisioning for clinic: ${clinicId}`);
+
+      // Vérifier si la base existe
+      const checkDbCommand = `
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1
+      `;
+
+      try {
+        await execAsync(checkDbCommand);
+
+        // La base existe, on la supprime
+        const dropDbCommand = `
+          PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -c "DROP DATABASE IF EXISTS ${dbName};"
+        `;
+        await execAsync(dropDbCommand);
+
+        logger.info(`✅ Cleaned up database: ${dbName}`);
+      } catch (error) {
+        // La base n'existe pas, rien à faire
+        logger.debug(`Database ${dbName} does not exist, no cleanup needed`);
+      }
+
+      return true;
+    } catch (error) {
+      logger.error(`❌ Failed to cleanup clinic database:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Vérifier l'intégrité d'une base clinic
+   * @param {String} clinicId - UUID de la clinic
+   * @returns {Promise<Object>} Résultat de la vérification
+   */
+  async checkClinicDatabaseIntegrity(clinicId) {
+    try {
+      const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
+      const dbUser = process.env.DB_USER || 'medicalpro';
+      const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+      const dbHost = process.env.DB_HOST || 'localhost';
+      const dbPort = process.env.DB_PORT || 5432;
+
+      // 1. Vérifier que la base existe
+      const checkDbCommand = `
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1
+      `;
+
+      try {
+        await execAsync(checkDbCommand);
+      } catch (error) {
+        return {
+          exists: false,
+          accessible: false,
+          tablesCount: 0,
+          errors: ['Database does not exist']
+        };
+      }
+
+      // 2. Vérifier que la base est accessible
+      const connectCommand = `
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -c "SELECT 1;"
+      `;
+
+      try {
+        await execAsync(connectCommand);
+      } catch (error) {
+        return {
+          exists: true,
+          accessible: false,
+          tablesCount: 0,
+          errors: ['Database exists but not accessible']
+        };
+      }
+
+      // 3. Compter les tables
+      const countTablesCommand = `
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -tc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';"
+      `;
+
+      const { stdout } = await execAsync(countTablesCommand);
+      const tablesCount = parseInt(stdout.trim());
+
+      // 4. Vérifier les tables critiques
+      const requiredTables = [
+        'healthcare_providers',
+        'patients',
+        'appointments',
+        'medical_documents'
+      ];
+
+      const missingTables = [];
+      for (const table of requiredTables) {
+        const checkTableCommand = `
+          PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -tc "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '${table}';" | grep -q 1
+        `;
+
+        try {
+          await execAsync(checkTableCommand);
+        } catch (error) {
+          missingTables.push(table);
+        }
+      }
+
+      const isHealthy = tablesCount > 0 && missingTables.length === 0;
+
+      return {
+        exists: true,
+        accessible: true,
+        tablesCount,
+        isHealthy,
+        missingTables,
+        errors: missingTables.length > 0 ? [`Missing tables: ${missingTables.join(', ')}`] : []
+      };
+
+    } catch (error) {
+      logger.error(`❌ Failed to check clinic database integrity:`, error.message);
+      return {
+        exists: false,
+        accessible: false,
+        tablesCount: 0,
+        isHealthy: false,
+        errors: [error.message]
+      };
+    }
+  }
+
+  /**
+   * Réparer une base clinic incomplète
+   * @param {String} clinicId - UUID de la clinic
+   */
+  async repairClinicDatabase(clinicId) {
+    try {
+      logger.info(`🔧 Starting clinic database repair for: ${clinicId}`);
+
+      // 1. Vérifier l'état actuel
+      const integrity = await this.checkClinicDatabaseIntegrity(clinicId);
+
+      if (!integrity.exists) {
+        // La base n'existe pas, on la crée complètement
+        logger.info('Database does not exist, creating from scratch...');
+        return await this.provisionClinicDatabase({
+          clinicId,
+          clinicName: 'Repaired Clinic',
+          country: 'FR'
+        });
+      }
+
+      if (!integrity.accessible) {
+        throw new Error('Database exists but is not accessible');
+      }
+
+      // 2. Réappliquer les migrations manquantes
+      if (integrity.missingTables.length > 0) {
+        logger.info(`Reapplying migrations for missing tables: ${integrity.missingTables.join(', ')}`);
+
+        const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
+        const dbUser = process.env.DB_USER || 'medicalpro';
+        const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+        const dbHost = process.env.DB_HOST || 'localhost';
+        const dbPort = process.env.DB_PORT || 5432;
+
+        await this._runMigrations(dbName, dbUser, dbPassword, dbHost, dbPort);
+      }
+
+      // 3. Vérifier à nouveau
+      const finalIntegrity = await this.checkClinicDatabaseIntegrity(clinicId);
+
+      if (finalIntegrity.isHealthy) {
+        logger.info(`✅ Clinic database repaired successfully`);
+        return { success: true, integrity: finalIntegrity };
+      } else {
+        throw new Error('Repair failed, database still unhealthy');
+      }
+
+    } catch (error) {
+      logger.error(`❌ Failed to repair clinic database:`, error.message);
+      throw error;
+    }
+  }
+}
+
+module.exports = new ClinicProvisioningService();

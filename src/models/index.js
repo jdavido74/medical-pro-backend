@@ -20,6 +20,9 @@ const Document = require('./Document');
 const Consent = require('./Consent');
 const ConsentTemplate = require('./ConsentTemplate');
 
+// Multi-clinic support
+const UserClinicMembership = require('./UserClinicMembership')(sequelize);
+
 // Définir les associations
 const defineAssociations = () => {
   // ===== COMPANY ASSOCIATIONS =====
@@ -94,6 +97,18 @@ const defineAssociations = () => {
     foreignKey: 'company_id',
     as: 'consent_templates',
     onDelete: 'CASCADE'
+  });
+
+  // Multi-clinic memberships
+  Company.hasMany(UserClinicMembership, {
+    foreignKey: 'company_id',
+    as: 'memberships',
+    onDelete: 'CASCADE'
+  });
+
+  UserClinicMembership.belongsTo(Company, {
+    foreignKey: 'company_id',
+    as: 'company'
   });
 
   // User associations
@@ -395,5 +410,7 @@ module.exports = {
   Document,
   Consent,
   ConsentTemplate,
+  // Multi-clinic support
+  UserClinicMembership,
   defineAssociations
 };

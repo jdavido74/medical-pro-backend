@@ -626,6 +626,750 @@ class EmailService {
       </html>
     `;
   }
+
+  /**
+   * Send consent signing request email to patient
+   * @param {Object} params
+   * @param {String} params.email - Patient email
+   * @param {String} params.patientName - Patient full name
+   * @param {String} params.clinicName - Clinic name
+   * @param {String} params.consentTitle - Consent document title
+   * @param {String} params.signingUrl - Full signing URL with token
+   * @param {String} params.expiresAt - Expiration date/time
+   * @param {String} params.customMessage - Optional custom message from clinic
+   * @param {String} params.language - Language code (fr, en, es)
+   */
+  async sendConsentSigningRequest({
+    email,
+    patientName,
+    clinicName,
+    consentTitle,
+    signingUrl,
+    expiresAt,
+    customMessage,
+    language = 'fr'
+  }) {
+    try {
+      const recipientEmail = this.getRecipientEmail(email);
+
+      let htmlContent = this.getConsentSigningEmailTemplate(language, {
+        email,
+        patientName,
+        clinicName,
+        consentTitle,
+        signingUrl,
+        expiresAt,
+        customMessage
+      });
+
+      if (this.testModeEnabled) {
+        htmlContent = this.wrapEmailContentWithTestInfo(htmlContent, email);
+      }
+
+      const subjects = {
+        fr: `Document à signer - ${clinicName}`,
+        en: `Document to sign - ${clinicName}`,
+        es: `Documento para firmar - ${clinicName}`
+      };
+
+      const mailOptions = {
+        from: process.env.FROM_EMAIL || 'noreply@medicalpro.com',
+        to: recipientEmail,
+        subject: this.getEmailSubject(subjects[language] || subjects.fr, 'CONSENT'),
+        html: htmlContent
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+
+      logger.info(`✅ Consent signing email sent to ${email}`, {
+        provider: this.provider,
+        clinicName,
+        consentTitle,
+        testMode: this.testModeEnabled
+      });
+
+      return {
+        success: true,
+        provider: this.provider,
+        messageId: result.messageId,
+        testMode: this.testModeEnabled,
+        actualRecipient: this.testModeEnabled ? recipientEmail : email
+      };
+    } catch (error) {
+      logger.error(`❌ Failed to send consent signing email to ${email}:`, error);
+      throw new Error(`Email sending failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get consent signing email template based on language
+   */
+  getConsentSigningEmailTemplate(language, params) {
+    const templates = {
+      fr: this.getConsentSigningEmailTemplateFR,
+      en: this.getConsentSigningEmailTemplateEN,
+      es: this.getConsentSigningEmailTemplateES
+    };
+
+    const templateFn = templates[language] || templates.fr;
+    return templateFn.call(this, params);
+  }
+
+  /**
+   * Consent signing email template - FRENCH
+   */
+  getConsentSigningEmailTemplateFR({ email, patientName, clinicName, consentTitle, signingUrl, expiresAt, customMessage }) {
+    const expiresDate = new Date(expiresAt).toLocaleDateString('fr-FR', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
+            .header { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
+            .button { display: inline-block; background-color: #3b82f6; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
+            .document-box { background-color: #f0f7ff; border: 1px solid #3b82f6; border-radius: 8px; padding: 20px; margin: 20px 0; }
+            .custom-message { background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 20px 0; border-radius: 0 8px 8px 0; }
+            .warning { color: #b91c1c; font-size: 14px; }
+            .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1 style="margin: 0;">📝 Document à signer</h1>
+              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
+            </div>
+
+            <div class="content">
+              <h2>Bonjour ${patientName},</h2>
+
+              <p><strong>${clinicName}</strong> vous demande de signer le document suivant :</p>
+
+              <div class="document-box">
+                <h3 style="margin: 0 0 10px 0; color: #1d4ed8;">${consentTitle}</h3>
+                <p style="margin: 0; color: #666;">Ce document requiert votre signature électronique.</p>
+              </div>
+
+              ${customMessage ? `
+              <div class="custom-message">
+                <p style="margin: 0; font-style: italic;">"${customMessage}"</p>
+              </div>
+              ` : ''}
+
+              <center>
+                <a href="${signingUrl}" class="button">Consulter et signer le document</a>
+              </center>
+
+              <p style="color: #666; font-size: 14px; text-align: center;">
+                Vous pouvez également copier ce lien dans votre navigateur :<br>
+                <code style="word-break: break-all; font-size: 12px;">${signingUrl}</code>
+              </p>
+
+              <p class="warning">
+                ⚠️ <strong>Important :</strong> Ce lien expire le ${expiresDate}.
+                Veuillez signer le document avant cette date.
+              </p>
+
+              <h4>Comment ça marche ?</h4>
+              <ol style="color: #666;">
+                <li>Cliquez sur le bouton ci-dessus</li>
+                <li>Lisez attentivement le document</li>
+                <li>Signez avec votre doigt ou votre souris</li>
+                <li>Validez votre signature</li>
+              </ol>
+            </div>
+
+            <div class="footer">
+              <p>© 2025 ${clinicName} - Propulsé par MedicalPro</p>
+              <p>Cet email a été envoyé à ${email}</p>
+              <p style="color: #999; font-size: 11px;">
+                Si vous n'êtes pas patient de ${clinicName}, veuillez ignorer cet email.
+              </p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+  }
+
+  /**
+   * Consent signing email template - ENGLISH
+   */
+  getConsentSigningEmailTemplateEN({ email, patientName, clinicName, consentTitle, signingUrl, expiresAt, customMessage }) {
+    const expiresDate = new Date(expiresAt).toLocaleDateString('en-US', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
+            .header { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
+            .button { display: inline-block; background-color: #3b82f6; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
+            .document-box { background-color: #f0f7ff; border: 1px solid #3b82f6; border-radius: 8px; padding: 20px; margin: 20px 0; }
+            .custom-message { background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 20px 0; border-radius: 0 8px 8px 0; }
+            .warning { color: #b91c1c; font-size: 14px; }
+            .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1 style="margin: 0;">📝 Document to Sign</h1>
+              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
+            </div>
+
+            <div class="content">
+              <h2>Hello ${patientName},</h2>
+
+              <p><strong>${clinicName}</strong> is requesting your signature on the following document:</p>
+
+              <div class="document-box">
+                <h3 style="margin: 0 0 10px 0; color: #1d4ed8;">${consentTitle}</h3>
+                <p style="margin: 0; color: #666;">This document requires your electronic signature.</p>
+              </div>
+
+              ${customMessage ? `
+              <div class="custom-message">
+                <p style="margin: 0; font-style: italic;">"${customMessage}"</p>
+              </div>
+              ` : ''}
+
+              <center>
+                <a href="${signingUrl}" class="button">Review and Sign Document</a>
+              </center>
+
+              <p style="color: #666; font-size: 14px; text-align: center;">
+                You can also copy this link into your browser:<br>
+                <code style="word-break: break-all; font-size: 12px;">${signingUrl}</code>
+              </p>
+
+              <p class="warning">
+                ⚠️ <strong>Important:</strong> This link expires on ${expiresDate}.
+                Please sign the document before this date.
+              </p>
+
+              <h4>How does it work?</h4>
+              <ol style="color: #666;">
+                <li>Click the button above</li>
+                <li>Read the document carefully</li>
+                <li>Sign with your finger or mouse</li>
+                <li>Confirm your signature</li>
+              </ol>
+            </div>
+
+            <div class="footer">
+              <p>© 2025 ${clinicName} - Powered by MedicalPro</p>
+              <p>This email was sent to ${email}</p>
+              <p style="color: #999; font-size: 11px;">
+                If you are not a patient of ${clinicName}, please ignore this email.
+              </p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+  }
+
+  /**
+   * Consent signing email template - SPANISH
+   */
+  getConsentSigningEmailTemplateES({ email, patientName, clinicName, consentTitle, signingUrl, expiresAt, customMessage }) {
+    const expiresDate = new Date(expiresAt).toLocaleDateString('es-ES', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
+            .header { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
+            .button { display: inline-block; background-color: #3b82f6; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
+            .document-box { background-color: #f0f7ff; border: 1px solid #3b82f6; border-radius: 8px; padding: 20px; margin: 20px 0; }
+            .custom-message { background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 20px 0; border-radius: 0 8px 8px 0; }
+            .warning { color: #b91c1c; font-size: 14px; }
+            .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1 style="margin: 0;">📝 Documento para Firmar</h1>
+              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
+            </div>
+
+            <div class="content">
+              <h2>Hola ${patientName},</h2>
+
+              <p><strong>${clinicName}</strong> le solicita firmar el siguiente documento:</p>
+
+              <div class="document-box">
+                <h3 style="margin: 0 0 10px 0; color: #1d4ed8;">${consentTitle}</h3>
+                <p style="margin: 0; color: #666;">Este documento requiere su firma electrónica.</p>
+              </div>
+
+              ${customMessage ? `
+              <div class="custom-message">
+                <p style="margin: 0; font-style: italic;">"${customMessage}"</p>
+              </div>
+              ` : ''}
+
+              <center>
+                <a href="${signingUrl}" class="button">Revisar y Firmar Documento</a>
+              </center>
+
+              <p style="color: #666; font-size: 14px; text-align: center;">
+                También puede copiar este enlace en su navegador:<br>
+                <code style="word-break: break-all; font-size: 12px;">${signingUrl}</code>
+              </p>
+
+              <p class="warning">
+                ⚠️ <strong>Importante:</strong> Este enlace expira el ${expiresDate}.
+                Por favor firme el documento antes de esta fecha.
+              </p>
+
+              <h4>¿Cómo funciona?</h4>
+              <ol style="color: #666;">
+                <li>Haga clic en el botón de arriba</li>
+                <li>Lea el documento atentamente</li>
+                <li>Firme con su dedo o ratón</li>
+                <li>Confirme su firma</li>
+              </ol>
+            </div>
+
+            <div class="footer">
+              <p>© 2025 ${clinicName} - Impulsado por MedicalPro</p>
+              <p>Este correo fue enviado a ${email}</p>
+              <p style="color: #999; font-size: 11px;">
+                Si no es paciente de ${clinicName}, por favor ignore este correo.
+              </p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+  }
+
+  /**
+   * Send invitation email to new healthcare provider
+   * @param {Object} params
+   * @param {String} params.email - Provider email
+   * @param {String} params.firstName - Provider first name
+   * @param {String} params.lastName - Provider last name
+   * @param {String} params.clinicName - Clinic name
+   * @param {String} params.role - Provider role (physician, practitioner, etc.)
+   * @param {String} params.invitationUrl - Full invitation URL with token
+   * @param {String} params.expiresAt - Expiration date/time
+   * @param {String} params.language - Language code (fr, en, es)
+   */
+  async sendInvitationEmail({
+    email,
+    firstName,
+    lastName,
+    clinicName,
+    role,
+    invitationUrl,
+    expiresAt,
+    language = 'fr'
+  }) {
+    try {
+      console.log('[EmailService] Sending invitation email:', {
+        email,
+        clinicName,
+        role,
+        language,
+        testMode: this.testModeEnabled
+      });
+
+      const recipientEmail = this.getRecipientEmail(email);
+
+      let htmlContent = this.getInvitationEmailTemplate(language, {
+        email,
+        firstName,
+        lastName,
+        clinicName,
+        role,
+        invitationUrl,
+        expiresAt
+      });
+
+      if (this.testModeEnabled) {
+        htmlContent = this.wrapEmailContentWithTestInfo(htmlContent, email);
+      }
+
+      const subjects = {
+        fr: `Invitation à rejoindre ${clinicName}`,
+        en: `Invitation to join ${clinicName}`,
+        es: `Invitación para unirse a ${clinicName}`
+      };
+
+      const mailOptions = {
+        from: process.env.FROM_EMAIL || 'noreply@medicalpro.com',
+        to: recipientEmail,
+        subject: this.getEmailSubject(subjects[language] || subjects.fr, 'INVITATION'),
+        html: htmlContent
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+
+      // Log in development
+      if (this.provider === 'console') {
+        logger.warn('📧 [DEVELOPMENT] Invitation email would be sent:');
+        logger.warn('─'.repeat(80));
+        logger.warn(`TO: ${email}`);
+        logger.warn(`FROM: ${mailOptions.from}`);
+        logger.warn(`SUBJECT: ${mailOptions.subject}`);
+        logger.warn('─'.repeat(80));
+        logger.warn('INVITATION LINK:');
+        logger.warn(invitationUrl);
+        logger.warn('─'.repeat(80));
+      }
+
+      logger.info(`✅ Invitation email sent to ${email}`, {
+        provider: this.provider,
+        clinicName,
+        role,
+        testMode: this.testModeEnabled
+      });
+
+      return {
+        success: true,
+        provider: this.provider,
+        messageId: result.messageId,
+        testMode: this.testModeEnabled,
+        actualRecipient: this.testModeEnabled ? recipientEmail : email
+      };
+    } catch (error) {
+      console.error('[EmailService] Invitation email error:', error);
+      logger.error(`❌ Failed to send invitation email to ${email}:`, error);
+      throw new Error(`Email sending failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get invitation email template based on language
+   */
+  getInvitationEmailTemplate(language, params) {
+    const templates = {
+      fr: this.getInvitationEmailTemplateFR,
+      en: this.getInvitationEmailTemplateEN,
+      es: this.getInvitationEmailTemplateES
+    };
+
+    const templateFn = templates[language] || templates.fr;
+    return templateFn.call(this, params);
+  }
+
+  /**
+   * Invitation email template - FRENCH
+   */
+  getInvitationEmailTemplateFR({ email, firstName, lastName, clinicName, role, invitationUrl, expiresAt }) {
+    const expiresDate = new Date(expiresAt).toLocaleDateString('fr-FR', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const roleLabels = {
+      physician: 'Médecin',
+      practitioner: 'Praticien de santé',
+      secretary: 'Secrétaire',
+      admin: 'Administrateur',
+      readonly: 'Consultant'
+    };
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
+            .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
+            .button { display: inline-block; background-color: #10b981; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
+            .info-box { background-color: #f0fdf4; border: 1px solid #10b981; border-radius: 8px; padding: 20px; margin: 20px 0; }
+            .warning { color: #b91c1c; font-size: 14px; margin-top: 20px; }
+            .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1 style="margin: 0;">🎉 Bienvenue dans l'équipe !</h1>
+              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
+            </div>
+
+            <div class="content">
+              <h2>Bonjour ${firstName} ${lastName},</h2>
+
+              <p>Vous avez été invité(e) à rejoindre <strong>${clinicName}</strong> en tant que <strong>${roleLabels[role] || role}</strong>.</p>
+
+              <div class="info-box">
+                <h3 style="margin: 0 0 10px 0; color: #059669;">Vos informations de compte</h3>
+                <p style="margin: 5px 0;"><strong>Email :</strong> ${email}</p>
+                <p style="margin: 5px 0;"><strong>Rôle :</strong> ${roleLabels[role] || role}</p>
+              </div>
+
+              <p>Pour activer votre compte et définir votre mot de passe, cliquez sur le bouton ci-dessous :</p>
+
+              <center>
+                <a href="${invitationUrl}" class="button">Activer mon compte</a>
+              </center>
+
+              <p style="color: #666; font-size: 14px; text-align: center;">
+                Vous pouvez également copier ce lien dans votre navigateur :<br>
+                <code style="word-break: break-all; font-size: 12px;">${invitationUrl}</code>
+              </p>
+
+              <p class="warning">
+                ⚠️ <strong>Important :</strong> Ce lien d'invitation expire le ${expiresDate}.
+                Activez votre compte avant cette date.
+              </p>
+
+              <h4>Que se passe-t-il ensuite ?</h4>
+              <ol style="color: #666;">
+                <li>Cliquez sur le lien d'activation</li>
+                <li>Définissez votre mot de passe sécurisé</li>
+                <li>Connectez-vous avec vos identifiants</li>
+                <li>Commencez à utiliser la plateforme</li>
+              </ol>
+            </div>
+
+            <div class="footer">
+              <p>© 2025 ${clinicName} - Propulsé par MedicalPro</p>
+              <p>Cet email a été envoyé à ${email}</p>
+              <p style="color: #999; font-size: 11px;">
+                Si vous n'avez pas demandé cette invitation, veuillez ignorer cet email.
+              </p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+  }
+
+  /**
+   * Invitation email template - ENGLISH
+   */
+  getInvitationEmailTemplateEN({ email, firstName, lastName, clinicName, role, invitationUrl, expiresAt }) {
+    const expiresDate = new Date(expiresAt).toLocaleDateString('en-US', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const roleLabels = {
+      physician: 'Physician',
+      practitioner: 'Healthcare Practitioner',
+      secretary: 'Secretary',
+      admin: 'Administrator',
+      readonly: 'Read-only User'
+    };
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
+            .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
+            .button { display: inline-block; background-color: #10b981; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
+            .info-box { background-color: #f0fdf4; border: 1px solid #10b981; border-radius: 8px; padding: 20px; margin: 20px 0; }
+            .warning { color: #b91c1c; font-size: 14px; margin-top: 20px; }
+            .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1 style="margin: 0;">🎉 Welcome to the Team!</h1>
+              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
+            </div>
+
+            <div class="content">
+              <h2>Hello ${firstName} ${lastName},</h2>
+
+              <p>You have been invited to join <strong>${clinicName}</strong> as a <strong>${roleLabels[role] || role}</strong>.</p>
+
+              <div class="info-box">
+                <h3 style="margin: 0 0 10px 0; color: #059669;">Your Account Information</h3>
+                <p style="margin: 5px 0;"><strong>Email:</strong> ${email}</p>
+                <p style="margin: 5px 0;"><strong>Role:</strong> ${roleLabels[role] || role}</p>
+              </div>
+
+              <p>To activate your account and set your password, click the button below:</p>
+
+              <center>
+                <a href="${invitationUrl}" class="button">Activate My Account</a>
+              </center>
+
+              <p style="color: #666; font-size: 14px; text-align: center;">
+                You can also copy this link into your browser:<br>
+                <code style="word-break: break-all; font-size: 12px;">${invitationUrl}</code>
+              </p>
+
+              <p class="warning">
+                ⚠️ <strong>Important:</strong> This invitation link expires on ${expiresDate}.
+                Please activate your account before this date.
+              </p>
+
+              <h4>What happens next?</h4>
+              <ol style="color: #666;">
+                <li>Click the activation link</li>
+                <li>Set your secure password</li>
+                <li>Log in with your credentials</li>
+                <li>Start using the platform</li>
+              </ol>
+            </div>
+
+            <div class="footer">
+              <p>© 2025 ${clinicName} - Powered by MedicalPro</p>
+              <p>This email was sent to ${email}</p>
+              <p style="color: #999; font-size: 11px;">
+                If you did not request this invitation, please ignore this email.
+              </p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+  }
+
+  /**
+   * Invitation email template - SPANISH
+   */
+  getInvitationEmailTemplateES({ email, firstName, lastName, clinicName, role, invitationUrl, expiresAt }) {
+    const expiresDate = new Date(expiresAt).toLocaleDateString('es-ES', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const roleLabels = {
+      physician: 'Médico',
+      practitioner: 'Profesional de salud',
+      secretary: 'Secretario/a',
+      admin: 'Administrador',
+      readonly: 'Usuario de solo lectura'
+    };
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
+            .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
+            .button { display: inline-block; background-color: #10b981; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
+            .info-box { background-color: #f0fdf4; border: 1px solid #10b981; border-radius: 8px; padding: 20px; margin: 20px 0; }
+            .warning { color: #b91c1c; font-size: 14px; margin-top: 20px; }
+            .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1 style="margin: 0;">🎉 ¡Bienvenido al Equipo!</h1>
+              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
+            </div>
+
+            <div class="content">
+              <h2>Hola ${firstName} ${lastName},</h2>
+
+              <p>Ha sido invitado/a a unirse a <strong>${clinicName}</strong> como <strong>${roleLabels[role] || role}</strong>.</p>
+
+              <div class="info-box">
+                <h3 style="margin: 0 0 10px 0; color: #059669;">Información de su cuenta</h3>
+                <p style="margin: 5px 0;"><strong>Email:</strong> ${email}</p>
+                <p style="margin: 5px 0;"><strong>Rol:</strong> ${roleLabels[role] || role}</p>
+              </div>
+
+              <p>Para activar su cuenta y establecer su contraseña, haga clic en el botón de abajo:</p>
+
+              <center>
+                <a href="${invitationUrl}" class="button">Activar Mi Cuenta</a>
+              </center>
+
+              <p style="color: #666; font-size: 14px; text-align: center;">
+                También puede copiar este enlace en su navegador:<br>
+                <code style="word-break: break-all; font-size: 12px;">${invitationUrl}</code>
+              </p>
+
+              <p class="warning">
+                ⚠️ <strong>Importante:</strong> Este enlace de invitación expira el ${expiresDate}.
+                Por favor active su cuenta antes de esta fecha.
+              </p>
+
+              <h4>¿Qué pasa después?</h4>
+              <ol style="color: #666;">
+                <li>Haga clic en el enlace de activación</li>
+                <li>Establezca su contraseña segura</li>
+                <li>Inicie sesión con sus credenciales</li>
+                <li>Comience a usar la plataforma</li>
+              </ol>
+            </div>
+
+            <div class="footer">
+              <p>© 2025 ${clinicName} - Impulsado por MedicalPro</p>
+              <p>Este correo fue enviado a ${email}</p>
+              <p style="color: #999; font-size: 11px;">
+                Si no solicitó esta invitación, por favor ignore este correo.
+              </p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+  }
 }
 
 // Export singleton instance

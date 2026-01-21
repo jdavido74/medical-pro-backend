@@ -21,6 +21,12 @@ const createClinicAppointment = require('../models/clinic/Appointment');
 const createClinicHealthcareProvider = require('../models/clinic/HealthcareProvider');
 const createClinicMedicalRecord = require('../models/clinic/MedicalRecord');
 const createClinicPrescription = require('../models/clinic/Prescription');
+const createClinicConsent = require('../models/clinic/Consent');
+const createClinicConsentTemplate = require('../models/clinic/ConsentTemplate');
+const createClinicConsentTemplateTranslation = require('../models/clinic/ConsentTemplateTranslation');
+const createClinicConsentSigningRequest = require('../models/clinic/ConsentSigningRequest');
+const createClinicPractitionerWeeklyAvailability = require('../models/clinic/PractitionerWeeklyAvailability');
+const createClinicPatientCareTeam = require('../models/clinic/PatientCareTeam');
 
 // Map of clinic model names to their factory functions
 const CLINIC_MODEL_FACTORIES = {
@@ -29,7 +35,13 @@ const CLINIC_MODEL_FACTORIES = {
   Practitioner: createClinicHealthcareProvider, // Map Practitioner → HealthcareProvider for clinics
   HealthcareProvider: createClinicHealthcareProvider,
   MedicalRecord: createClinicMedicalRecord,
-  Prescription: createClinicPrescription
+  Prescription: createClinicPrescription,
+  Consent: createClinicConsent,
+  ConsentTemplate: createClinicConsentTemplate,
+  ConsentTemplateTranslation: createClinicConsentTemplateTranslation,
+  ConsentSigningRequest: createClinicConsentSigningRequest,
+  PractitionerWeeklyAvailability: createClinicPractitionerWeeklyAvailability,
+  PatientCareTeam: createClinicPatientCareTeam
 };
 
 // Cache for initialized models per database
@@ -77,9 +89,54 @@ async function getModel(clinicDb, modelName) {
   // Cache it
   dbModels[modelName] = model;
 
+  // Set up associations after caching (so other models can be retrieved)
+  await setupAssociations(clinicDb, modelName, model, dbModels);
+
   console.log(`[ModelFactory] ✅ Created clinic model '${modelName}' for database`);
 
   return model;
+}
+
+/**
+ * Set up associations for a newly created model
+ * This is called after each model is created to set up its relations
+ */
+async function setupAssociations(clinicDb, modelName, model, dbModels) {
+  try {
+    switch (modelName) {
+      case 'Appointment':
+        // Appointment belongs to Patient
+        if (!dbModels.Patient) {
+          const Patient = CLINIC_MODEL_FACTORIES.Patient(clinicDb);
+          dbModels.Patient = Patient;
+        }
+        if (!model.associations?.patient) {
+          model.belongsTo(dbModels.Patient, {
+            foreignKey: 'patient_id',
+            as: 'patient'
+          });
+        }
+        break;
+
+      case 'Patient':
+        // Patient has many Appointments
+        if (!dbModels.Appointment) {
+          const Appointment = CLINIC_MODEL_FACTORIES.Appointment(clinicDb);
+          dbModels.Appointment = Appointment;
+        }
+        if (!model.associations?.appointments) {
+          model.hasMany(dbModels.Appointment, {
+            foreignKey: 'patient_id',
+            as: 'appointments'
+          });
+        }
+        break;
+
+      // Add more associations as needed
+    }
+  } catch (err) {
+    console.warn(`[ModelFactory] Could not set up associations for ${modelName}:`, err.message);
+  }
 }
 
 /**

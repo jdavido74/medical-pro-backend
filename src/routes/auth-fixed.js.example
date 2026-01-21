@@ -1,0 +1,165 @@
+/**
+ * SOLUTION 1 : Registration avec rollback automatique
+ *
+ * Principe :
+ * - Créer company + user dans une transaction
+ * - Provisionner la base clinic
+ * - Si provisioning échoue → Rollback de la transaction
+ * - L'utilisateur reçoit une erreur claire
+ */
+
+router.post('/register', async (req, res, next) => {
+  let transaction;
+  let companyCreated = null;
+
+  try {
+    // Validation
+    const { error, value } = registerSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Validation Error',
+          details: error.details.map(detail => detail.message).join(', ')
+        }
+      });
+    }
+
+    // Vérifications d'unicité (email company, email user)
+    // ... (code existant)
+
+    // ============================================================
+    // ÉTAPE 1 : Créer company + user dans une transaction
+    // ============================================================
+    transaction = await sequelize.transaction();
+
+    const clinicId = uuidv4();
+    const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
+
+    const company = await Company.create({
+      id: clinicId,
+      name: value.companyName,
+      country: value.country,
+      db_name: dbName,
+      // ... autres champs
+    }, { transaction });
+
+    const user = await User.create({
+      company_id: company.id,
+      email: value.email,
+      password_hash: value.password,
+      role: 'admin',
+      email_verified: false
+      // ... autres champs
+    }, { transaction });
+
+    companyCreated = { company, user };
+
+    // ============================================================
+    // ÉTAPE 2 : Provisionner la base clinic (CRITIQUE)
+    // ============================================================
+    logger.info(`🔧 Starting clinic database provisioning for: ${company.id}`);
+
+    const provisioningResult = await clinicProvisioningService.provisionClinicDatabase({
+      clinicId: company.id,
+      clinicName: company.name,
+      country: company.country
+    });
+
+    if (!provisioningResult.success) {
+      throw new Error('Clinic database provisioning failed');
+    }
+
+    logger.info(`✅ Clinic database provisioned successfully`);
+
+    // ============================================================
+    // ÉTAPE 3 : Vérifier que la base est accessible
+    // ============================================================
+    const dbVerified = await clinicProvisioningService.verifyClinicDatabase(company.id);
+
+    if (!dbVerified) {
+      throw new Error('Clinic database verification failed - database not accessible');
+    }
+
+    logger.info(`✅ Clinic database verified and accessible`);
+
+    // ============================================================
+    // ÉTAPE 4 : Créer le healthcare provider dans la base clinic
+    // ============================================================
+    const dbConfig = {
+      host: company.db_host || process.env.DB_HOST || 'localhost',
+      port: company.db_port || parseInt(process.env.DB_PORT) || 5432,
+      user: company.db_user || process.env.DB_USER || 'medicalpro',
+      password: company.db_password || process.env.DB_PASSWORD || 'medicalpro2024'
+    };
+
+    await clinicProvisioningService.createHealthcareProviderInClinic(
+      company.db_name,
+      dbConfig.user,
+      dbConfig.password,
+      dbConfig.host,
+      dbConfig.port,
+      company.id,
+      user.toJSON()
+    );
+
+    logger.info(`✅ Healthcare provider created in clinic database`);
+
+    // ============================================================
+    // ÉTAPE 5 : Tout est OK → Commit de la transaction
+    // ============================================================
+    await transaction.commit();
+    logger.info(`✅ Registration completed successfully for: ${user.email}`);
+
+    // Envoyer l'email de vérification
+    // ... (code existant)
+
+    return res.status(201).json({
+      success: true,
+      message: 'Registration successful. Please check your email to verify your account.',
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          company: {
+            id: company.id,
+            name: company.name
+          }
+        }
+      }
+    });
+
+  } catch (error) {
+    // ============================================================
+    // ROLLBACK EN CAS D'ERREUR
+    // ============================================================
+    logger.error('❌ Registration failed:', error.message);
+
+    // Rollback de la transaction SQL
+    if (transaction) {
+      await transaction.rollback();
+      logger.info('🔄 Database transaction rolled back');
+    }
+
+    // Nettoyer la base clinic si elle a été créée
+    if (companyCreated) {
+      try {
+        await clinicProvisioningService.cleanupFailedProvisioning(companyCreated.company.id);
+        logger.info('🗑️ Clinic database cleaned up');
+      } catch (cleanupError) {
+        logger.error('⚠️ Failed to cleanup clinic database:', cleanupError.message);
+      }
+    }
+
+    // Retourner une erreur claire à l'utilisateur
+    return res.status(500).json({
+      success: false,
+      error: {
+        message: 'Registration failed',
+        details: error.message,
+        reason: 'We could not complete your registration. Please try again or contact support.',
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+});

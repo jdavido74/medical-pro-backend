@@ -44,14 +44,15 @@ class ClinicProvisioningService {
       await this._runMigrations(dbName, dbUser, dbPassword, dbHost, dbPort);
       logger.info(`✅ Migrations executed for: ${dbName}`);
 
-      // Step 3: Initialize clinic-specific data
-      await this._initializeClinicData(dbName, dbUser, dbPassword, dbHost, dbPort, clinicId, country);
+      // Step 3: Initialize clinic-specific data (create default facility)
+      const facilityInfo = await this._initializeClinicData(dbName, dbUser, dbPassword, dbHost, dbPort, clinicId, country, clinicName);
       logger.info(`✅ Clinic data initialized for: ${dbName}`);
 
       logger.info(`✅ Clinic provisioning completed successfully`, {
         clinicId,
         clinicName,
-        dbName
+        dbName,
+        defaultFacilityId: facilityInfo.defaultFacilityId
       });
 
       return {
@@ -63,7 +64,9 @@ class ClinicProvisioningService {
           db_host: dbHost,
           db_port: dbPort,
           db_user: dbUser,
-          country
+          country,
+          defaultFacilityId: facilityInfo.defaultFacilityId,
+          defaultFacilityName: facilityInfo.facilityName
         }
       };
     } catch (error) {
@@ -98,6 +101,7 @@ class ClinicProvisioningService {
   async _runMigrations(dbName, dbUser, dbPassword, dbHost, dbPort) {
     try {
       const migrationFiles = [
+        // Core medical schema
         '001_medical_schema.sql',
         '002_medical_patients.sql',
         '003_products_services.sql',
@@ -105,7 +109,42 @@ class ClinicProvisioningService {
         '005_medical_appointments.sql',
         '006_medical_appointment_items.sql',
         '007_medical_documents.sql',
-        '008_medical_consents.sql'
+        '008_medical_consents.sql',
+        '009_email_verification.sql',
+        '010_audit_logs.sql',
+        '011_add_provider_availability.sql',
+        '012_create_clinic_roles.sql',
+        '013_create_clinic_settings.sql',
+        '014_add_invitation_fields.sql',
+        '014_add_operating_days_and_lunch_breaks.sql',
+        '015_fix_birth_date_nullable.sql',
+        '016_add_administrative_role.sql',
+        '017_create_medical_records.sql',
+        '018_alter_medical_records_add_columns.sql',
+        '019_create_prescriptions.sql',
+        '019_alter_prescriptions_add_snapshots.sql',
+        // Consent system
+        'clinic_020_medical_consents.sql',
+        'clinic_021_consent_template_translations.sql',
+        'clinic_022_consent_signing_requests.sql',
+        'clinic_023_fix_healthcare_providers_role_constraint.sql',
+        'clinic_024_practitioner_weekly_availability.sql',
+        'clinic_025_patient_care_team.sql',
+        // Phase 1 Security Fix
+        'clinic_026_phase1_auth_security_fix.sql',
+        'clinic_fix_gender_constraint.sql',
+        // Onboarding - Teams
+        '020_create_teams.sql',
+        // Standardization
+        'clinic_027_standardize_roles.sql',
+        // Schema alignments (frontend/backend/db)
+        'clinic_028_add_patient_id_number.sql',
+        'clinic_029_add_current_medications.sql',
+        'clinic_030_add_appointment_fields.sql',
+        'clinic_031_add_consent_fields.sql',
+        'clinic_032_fix_consent_template_types_and_status.sql',
+        'clinic_033_fix_prescriptions_schema.sql',
+        'clinic_034_add_operating_days_to_settings.sql'
       ];
 
       for (const migrationFile of migrationFiles) {
@@ -127,14 +166,71 @@ class ClinicProvisioningService {
 
   /**
    * Initialize clinic-specific data (settings, defaults, etc.)
+   * Creates default facility using the clinic name
    * @private
    */
-  async _initializeClinicData(dbName, dbUser, dbPassword, dbHost, dbPort, clinicId, country) {
+  async _initializeClinicData(dbName, dbUser, dbPassword, dbHost, dbPort, clinicId, country, clinicName) {
     try {
-      // Initialize with default values for the clinic
-      // This can be extended in the future for clinic-specific defaults
-      logger.debug(`Clinic data initialized for: ${dbName}`);
+      // Step 1: Create default medical facility
+      // Use clinic ID as facility ID for the first facility
+      // This allows: 1 facility now, but can add more later with different IDs
+      const defaultFacilityId = clinicId; // Use clinic ID as first facility ID
+
+      const createFacilityCommand = `
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} << 'EOF'
+INSERT INTO medical_facilities (
+  id,
+  name,
+  facility_type,
+  address_line1,
+  city,
+  postal_code,
+  country,
+  is_active,
+  created_at,
+  updated_at
+) VALUES (
+  '${defaultFacilityId}',
+  '${clinicName.replace(/'/g, "''")}',
+  'cabinet',
+  'À compléter',
+  'À compléter',
+  '00000',
+  '${country}',
+  true,
+  NOW(),
+  NOW()
+)
+ON CONFLICT (id) DO NOTHING;
+EOF
+      `;
+
+      await execAsync(createFacilityCommand);
+      logger.info(`✅ Default facility created: ${clinicName}`);
+
+      // Step 2: Insert default clinic roles for this facility
+      const insertRolesCommand = `
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} << 'EOF'
+SELECT insert_default_clinic_roles('${defaultFacilityId}'::uuid);
+EOF
+      `;
+
+      try {
+        await execAsync(insertRolesCommand);
+        logger.info(`✅ Default clinic roles created for facility: ${defaultFacilityId}`);
+      } catch (roleError) {
+        // Log but don't fail provisioning if roles can't be created
+        // They can be added later via migration
+        logger.warn(`⚠️ Could not create default roles: ${roleError.message}`);
+      }
+
+      // Return facility info for later use
+      return {
+        defaultFacilityId,
+        facilityName: clinicName
+      };
     } catch (error) {
+      logger.error(`Failed to initialize clinic data: ${error.message}`);
       throw new Error(`Failed to initialize clinic data: ${error.message}`);
     }
   }
@@ -142,6 +238,12 @@ class ClinicProvisioningService {
   /**
    * Create healthcare provider in clinic database
    * This syncs the user from the central database to the clinic-specific database
+   *
+   * PHASE 1 SECURITY FIX:
+   * - NO LONGER copies password_hash (authentication is in central DB only)
+   * - Stores central_user_id to link back to users table
+   * - Marks auth_migrated_to_central = true
+   *
    * @param {String} dbName - Clinic database name
    * @param {String} dbUser - Database user
    * @param {String} dbPassword - Database password
@@ -170,36 +272,47 @@ class ClinicProvisioningService {
         }
       });
 
-      // Create a basic healthcare provider record (without full model definition)
-      // The healthcare_providers table is created by migrations
+      // PHASE 1 FIX: Create healthcare provider WITHOUT password_hash
+      // Password is ONLY stored in central users table
+      // central_user_id links back to users.id for authentication
       const insertSql = `
         INSERT INTO healthcare_providers (
-          id, facility_id, email, password_hash, first_name, last_name,
-          profession, role, is_active, email_verified, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT (email) DO NOTHING;
+          id, facility_id, email, first_name, last_name,
+          profession, role, is_active, email_verified,
+          central_user_id, auth_migrated_to_central,
+          created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (email) DO UPDATE SET
+          central_user_id = EXCLUDED.central_user_id,
+          auth_migrated_to_central = EXCLUDED.auth_migrated_to_central,
+          updated_at = CURRENT_TIMESTAMP;
       `;
 
       await clinicDb.query(insertSql, {
         bind: [
-          userData.id,                           // id
-          clinicId,                              // facility_id
-          userData.email,                        // email
-          userData.password_hash,                // password_hash
+          userData.id,                                          // id (same as central user id for consistency)
+          clinicId,                                             // facility_id
+          userData.email,                                       // email
           userData.first_name || userData.firstName || 'User',  // first_name
           userData.last_name || userData.lastName || '',        // last_name
-          'practitioner',                        // profession (default)
-          userData.role || 'practitioner',       // role
-          true,                                  // is_active
-          userData.email_verified || false       // email_verified
+          'practitioner',                                       // profession (default)
+          userData.role || 'admin',                             // role
+          true,                                                 // is_active
+          userData.email_verified || false,                     // email_verified
+          userData.id,                                          // central_user_id (links to users.id)
+          true                                                  // auth_migrated_to_central
         ]
       });
 
       await clinicDb.close();
-      logger.info(`✅ Healthcare provider created in clinic database: ${dbName}`, {
+      logger.info(`✅ Healthcare provider created in clinic database (Phase 1 - no password copied): ${dbName}`, {
         clinicId,
-        userId: userData.id,
-        email: userData.email
+        centralUserId: userData.id,
+        email: userData.email,
+        authMigratedToCentral: true
       });
 
       return true;
@@ -238,6 +351,215 @@ class ClinicProvisioningService {
    */
   getClinicDatabaseName(clinicId) {
     return `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
+  }
+
+  /**
+   * Cleanup failed provisioning - Remove clinic database if it was partially created
+   * @param {String} clinicId - UUID of the clinic
+   */
+  async cleanupFailedProvisioning(clinicId) {
+    try {
+      const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
+      const dbUser = process.env.DB_USER || 'medicalpro';
+      const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+      const dbHost = process.env.DB_HOST || 'localhost';
+      const dbPort = process.env.DB_PORT || 5432;
+
+      logger.info(`🗑️ Cleaning up failed provisioning for clinic: ${clinicId}`);
+
+      // Check if database exists
+      const checkDbCommand = `
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1
+      `;
+
+      try {
+        await execAsync(checkDbCommand);
+
+        // Database exists, drop it
+        const dropDbCommand = `
+          PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -c "DROP DATABASE IF EXISTS ${dbName};"
+        `;
+        await execAsync(dropDbCommand);
+
+        logger.info(`✅ Cleaned up database: ${dbName}`);
+      } catch (error) {
+        // Database doesn't exist, nothing to cleanup
+        logger.debug(`Database ${dbName} does not exist, no cleanup needed`);
+      }
+
+      return true;
+    } catch (error) {
+      logger.error(`❌ Failed to cleanup clinic database:`, error.message);
+      // Don't throw - cleanup is best effort
+      return false;
+    }
+  }
+
+  /**
+   * Check clinic database integrity
+   * @param {String} clinicId - UUID of the clinic
+   * @returns {Promise<Object>} Integrity check result
+   */
+  async checkClinicDatabaseIntegrity(clinicId) {
+    try {
+      const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
+      const dbUser = process.env.DB_USER || 'medicalpro';
+      const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+      const dbHost = process.env.DB_HOST || 'localhost';
+      const dbPort = process.env.DB_PORT || 5432;
+
+      // 1. Check if database exists
+      const checkDbCommand = `
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1
+      `;
+
+      try {
+        await execAsync(checkDbCommand);
+      } catch (error) {
+        return {
+          exists: false,
+          accessible: false,
+          tablesCount: 0,
+          isHealthy: false,
+          errors: ['Database does not exist']
+        };
+      }
+
+      // 2. Check if database is accessible
+      const connectCommand = `
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -c "SELECT 1;" 2>&1
+      `;
+
+      try {
+        await execAsync(connectCommand);
+      } catch (error) {
+        return {
+          exists: true,
+          accessible: false,
+          tablesCount: 0,
+          isHealthy: false,
+          errors: ['Database exists but not accessible']
+        };
+      }
+
+      // 3. Count tables
+      const countTablesCommand = `
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -tc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';"
+      `;
+
+      const { stdout } = await execAsync(countTablesCommand);
+      const tablesCount = parseInt(stdout.trim()) || 0;
+
+      // 4. Check for required tables
+      const requiredTables = [
+        'healthcare_providers',
+        'patients',
+        'appointments'
+      ];
+
+      const missingTables = [];
+      for (const table of requiredTables) {
+        const checkTableCommand = `
+          PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -tc "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '${table}';" | grep -q 1
+        `;
+
+        try {
+          await execAsync(checkTableCommand);
+        } catch (error) {
+          missingTables.push(table);
+        }
+      }
+
+      const isHealthy = tablesCount > 0 && missingTables.length === 0;
+
+      return {
+        exists: true,
+        accessible: true,
+        tablesCount,
+        isHealthy,
+        missingTables,
+        errors: missingTables.length > 0 ? [`Missing tables: ${missingTables.join(', ')}`] : []
+      };
+
+    } catch (error) {
+      logger.error(`❌ Failed to check clinic database integrity:`, error.message);
+      return {
+        exists: false,
+        accessible: false,
+        tablesCount: 0,
+        isHealthy: false,
+        errors: [error.message]
+      };
+    }
+  }
+
+  /**
+   * Repair clinic database - Fix incomplete or corrupted clinic database
+   * @param {String} clinicId - UUID of the clinic
+   * @param {String} clinicName - Name of the clinic
+   * @param {String} country - Country code
+   */
+  async repairClinicDatabase(clinicId, clinicName, country) {
+    try {
+      logger.info(`🔧 Starting clinic database repair for: ${clinicId}`);
+
+      // 1. Check current state
+      const integrity = await this.checkClinicDatabaseIntegrity(clinicId);
+
+      if (!integrity.exists) {
+        // Database doesn't exist, create from scratch
+        logger.info('Database does not exist, creating from scratch...');
+        return await this.provisionClinicDatabase({
+          clinicId,
+          clinicName: clinicName || 'Repaired Clinic',
+          country: country || 'FR'
+        });
+      }
+
+      if (!integrity.accessible) {
+        throw new Error('Database exists but is not accessible');
+      }
+
+      if (integrity.isHealthy) {
+        logger.info('Database is already healthy, no repair needed');
+        return {
+          success: true,
+          message: 'Database is already healthy',
+          integrity
+        };
+      }
+
+      // 2. Reapply migrations for missing tables
+      if (integrity.missingTables.length > 0) {
+        logger.info(`Reapplying migrations for missing tables: ${integrity.missingTables.join(', ')}`);
+
+        const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
+        const dbUser = process.env.DB_USER || 'medicalpro';
+        const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+        const dbHost = process.env.DB_HOST || 'localhost';
+        const dbPort = process.env.DB_PORT || 5432;
+
+        await this._runMigrations(dbName, dbUser, dbPassword, dbHost, dbPort);
+      }
+
+      // 3. Verify again
+      const finalIntegrity = await this.checkClinicDatabaseIntegrity(clinicId);
+
+      if (finalIntegrity.isHealthy) {
+        logger.info(`✅ Clinic database repaired successfully`);
+        return {
+          success: true,
+          message: 'Database repaired successfully',
+          integrity: finalIntegrity
+        };
+      } else {
+        throw new Error('Repair failed, database still unhealthy');
+      }
+
+    } catch (error) {
+      logger.error(`❌ Failed to repair clinic database:`, error.message);
+      throw error;
+    }
   }
 }
 

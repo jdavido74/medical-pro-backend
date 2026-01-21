@@ -163,35 +163,78 @@ function getCentralConnection() {
  */
 async function getClinicConnectionInfo(clinicId) {
   try {
+    console.log('🔍 [ConnectionManager] Fetching clinic connection info for:', clinicId);
     const central = await initializeCentralConnection();
 
-    // Verify clinic exists in central database
+    // Verify clinic exists and is active in central database
     const [results] = await central.query(
-      `SELECT id, name
+      `SELECT id, name, is_active
        FROM companies
-       WHERE id = :clinicId AND deleted_at IS NULL`,
+       WHERE id = :clinicId
+         AND deleted_at IS NULL
+         AND is_active = true`,
       { replacements: { clinicId }, type: 'SELECT' }
     );
 
-    if (!results || results.length === 0) {
-      throw new Error(`Clinic ${clinicId} not found or inactive`);
+    console.log('📊 [ConnectionManager] Central DB query results:', {
+      clinicId,
+      isArray: Array.isArray(results),
+      found: Array.isArray(results) ? results.length > 0 : !!results,
+      results: results
+    });
+
+    // Handle both array and object responses from Sequelize
+    let company;
+    if (Array.isArray(results)) {
+      if (results.length === 0) {
+        console.error('❌ [ConnectionManager] Clinic not found in central database:', {
+          clinicId,
+          reason: 'Not found, deleted, or suspended'
+        });
+        throw new Error(`Clinic ${clinicId} not found, deleted, or suspended`);
+      }
+      company = results[0];
+    } else if (results && results.id) {
+      // Sequelize sometimes returns a single object instead of array
+      company = results;
+    } else {
+      console.error('❌ [ConnectionManager] Clinic not found in central database:', {
+        clinicId,
+        reason: 'Not found, deleted, or suspended',
+        receivedData: results
+      });
+      throw new Error(`Clinic ${clinicId} not found, deleted, or suspended`);
     }
 
     // Construct clinic database connection info from clinicId
-    // Database name format: medicalpro_clinic_<clinicId>
-    const dbName = `medicalpro_clinic_${clinicId}`;
+    // Database name format: medicalpro_clinic_<clinicId> (with underscores instead of hyphens)
+    const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
 
-    return {
+    const connectionInfo = {
       id: clinicId,
-      name: results[0].name,
+      name: company.name,
       db_host: process.env.DB_HOST || 'localhost',
       db_port: process.env.DB_PORT || 5432,
       db_name: dbName,
       db_user: process.env.DB_USER || 'medicalpro',
       db_password: process.env.DB_PASSWORD || 'medicalpro2024'
     };
+
+    console.log('✅ [ConnectionManager] Clinic connection info retrieved:', {
+      clinicId,
+      clinicName: connectionInfo.name,
+      dbName: connectionInfo.db_name,
+      host: connectionInfo.db_host,
+      port: connectionInfo.db_port
+    });
+
+    return connectionInfo;
   } catch (error) {
-    console.error('[ConnectionManager] Error fetching clinic connection info:', error.message);
+    console.error('❌ [ConnectionManager] Error fetching clinic connection info:', {
+      clinicId,
+      error: error.message,
+      stack: error.stack
+    });
     throw error;
   }
 }
@@ -206,8 +249,11 @@ async function getClinicConnectionInfo(clinicId) {
 async function getClinicConnection(clinicId) {
   // Check cache first (significant performance improvement)
   if (clinicConnections.has(clinicId)) {
+    console.log('♻️  [ConnectionManager] Using cached connection for clinic:', clinicId);
     return clinicConnections.get(clinicId);
   }
+
+  console.log('🆕 [ConnectionManager] Creating new connection for clinic:', clinicId);
 
   try {
     // Fetch clinic connection info from central DB
@@ -223,15 +269,33 @@ async function getClinicConnection(clinicId) {
       isCentral: false
     });
 
+    console.log('🔌 [ConnectionManager] Attempting to connect to clinic database:', {
+      database: config.database,
+      host: config.host,
+      port: config.port,
+      user: config.username
+    });
+
     // Create and authenticate connection
     const clinicSequelize = await createAndAuthenticateConnection(config, `Clinic ${clinicId}`);
 
     // Cache the connection for future use
     clinicConnections.set(clinicId, clinicSequelize);
 
+    console.log('✅ [ConnectionManager] Connection established and cached for clinic:', {
+      clinicId,
+      dbName: config.database,
+      cacheSize: clinicConnections.size
+    });
+
     return clinicSequelize;
   } catch (error) {
-    console.error(`[ConnectionManager] ❌ Failed to connect to clinic ${clinicId}:`, error.message);
+    console.error('❌ [ConnectionManager] Failed to connect to clinic:', {
+      clinicId,
+      error: error.message,
+      errorType: error.name,
+      stack: error.stack
+    });
     throw error;
   }
 }

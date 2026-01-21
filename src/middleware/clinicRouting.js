@@ -32,11 +32,19 @@ const clinicRoutingMiddleware = async (req, res, next) => {
   try {
     // Skip routing for auth routes (they use central DB)
     if (req.path.startsWith('/auth')) {
+      console.log('⏭️  [ClinicRouting] Skipping clinic routing for auth route:', req.path);
       return next();
     }
 
+    console.log('🔍 [ClinicRouting] Processing request:', {
+      method: req.method,
+      path: req.path,
+      hasUser: !!req.user
+    });
+
     // Check if user is authenticated
     if (!req.user) {
+      console.error('❌ [ClinicRouting] No authenticated user found');
       return res.status(401).json({
         success: false,
         error: {
@@ -50,7 +58,19 @@ const clinicRoutingMiddleware = async (req, res, next) => {
     // In new architecture: companyId = clinic_id
     const clinicId = req.user.companyId;
 
+    console.log('🔑 [ClinicRouting] User info:', {
+      userId: req.user.id,
+      email: req.user.email,
+      companyId: clinicId,
+      role: req.user.role
+    });
+
     if (!clinicId) {
+      console.error('❌ [ClinicRouting] User authenticated but no clinic_id found', {
+        userId: req.user.id,
+        email: req.user.email
+      });
+
       logger.error('User authenticated but no clinic_id found', {
         userId: req.user.id,
         email: req.user.email
@@ -67,12 +87,24 @@ const clinicRoutingMiddleware = async (req, res, next) => {
     }
 
     try {
+      console.log('🔌 [ClinicRouting] Attempting to connect to clinic database:', {
+        clinicId,
+        expectedDbName: `medicalpro_clinic_${clinicId}`
+      });
+
       // Get clinic database connection
       const clinicDb = await getClinicConnection(clinicId);
 
       // Attach to request object
       req.clinicDb = clinicDb;
       req.clinicId = clinicId;
+
+      console.log('✅ [ClinicRouting] Successfully routed to clinic database:', {
+        clinicId,
+        userId: req.user.id,
+        method: req.method,
+        path: req.path
+      });
 
       logger.debug(`Routed to clinic ${clinicId}`, {
         userId: req.user.id,
@@ -82,6 +114,13 @@ const clinicRoutingMiddleware = async (req, res, next) => {
 
       next();
     } catch (clinicError) {
+      console.error('❌ [ClinicRouting] Failed to get clinic connection:', {
+        clinicId,
+        userId: req.user.id,
+        error: clinicError.message,
+        stack: clinicError.stack
+      });
+
       logger.error(`Failed to get clinic connection for ${clinicId}`, {
         userId: req.user.id,
         error: clinicError.message

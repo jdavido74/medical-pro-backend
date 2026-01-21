@@ -1,6 +1,9 @@
 /**
  * Healthcare Providers Routes
  * Gestion des utilisateurs de la clinique (praticiens, infirmiers, secrétaires, etc.)
+ *
+ * IMPORTANT: Healthcare providers sont créés dans la base clinique.
+ * Une entrée dans user_clinic_memberships (base centrale) permet l'authentification.
  */
 
 const express = require('express');
@@ -13,6 +16,8 @@ const {
 } = require('../base/clinicConfigSchemas');
 const { authMiddleware } = require('../middleware/auth');
 const { clinicRoutingMiddleware } = require('../middleware/clinicRouting');
+const { UserClinicMembership, Company } = require('../models'); // For multi-clinic auth
+const emailService = require('../services/emailService');
 
 // Apply middleware
 router.use(authMiddleware);
@@ -69,7 +74,7 @@ router.get('/', async (req, res) => {
         id, facility_id, email, first_name, last_name, title,
         profession, specialties, adeli, rpps, order_number,
         role, permissions, phone, mobile, availability, color,
-        is_active, email_verified, last_login, created_at, updated_at
+        is_active, email_verified, account_status, last_login, created_at, updated_at
       FROM healthcare_providers
       ${whereClause}
       ORDER BY last_name, first_name
@@ -117,7 +122,7 @@ router.get('/:id', async (req, res) => {
         id, facility_id, email, first_name, last_name, title,
         profession, specialties, adeli, rpps, order_number,
         role, permissions, phone, mobile, availability, color,
-        is_active, email_verified, last_login, created_at, updated_at
+        is_active, email_verified, account_status, last_login, created_at, updated_at
       FROM healthcare_providers
       WHERE id = :id
     `, { replacements: { id } });
@@ -145,6 +150,10 @@ router.get('/:id', async (req, res) => {
 /**
  * POST /api/v1/healthcare-providers
  * Create new healthcare provider
+ *
+ * Creates:
+ * 1. Healthcare provider in clinic database (with password)
+ * 2. Membership entry in central database (for multi-clinic auth lookup)
  */
 router.post('/', async (req, res) => {
   try {
@@ -157,42 +166,161 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(value.password_hash, 10);
+    const crypto = require('crypto');
+    let hashedPassword = null;
+    let invitationToken = null;
+    let invitationExpiresAt = null;
+    let accountStatus = 'active';
 
-    // Insert provider (use req.clinicId from auth context, not from request body)
+    // Déterminer le mode: invitation ou mot de passe direct
+    if (value.send_invitation) {
+      // Mode invitation: générer un token
+      invitationToken = crypto.randomBytes(32).toString('hex');
+      invitationExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 jours
+      accountStatus = 'pending';
+      console.log('[healthcareProviders] Creating user with invitation token');
+    } else {
+      // Mode mot de passe direct: hacher le mot de passe
+      if (!value.password_hash) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            message: 'Validation Error',
+            details: 'Le mot de passe est obligatoire si l\'invitation n\'est pas activée / La contraseña es obligatoria si la invitación no está activada'
+          }
+        });
+      }
+      hashedPassword = await bcrypt.hash(value.password_hash, 12);
+      accountStatus = 'active';
+      console.log('[healthcareProviders] Creating user with direct password');
+    }
+
+    // ============================================================
+    // ÉTAPE 1: Vérifier que l'email n'existe pas déjà dans cette clinique
+    // ============================================================
+    const [existingProviders] = await req.clinicDb.query(`
+      SELECT id FROM healthcare_providers WHERE email = :email
+    `, { replacements: { email: value.email.toLowerCase() } });
+
+    if (existingProviders.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: { message: 'Email already exists in this clinic' }
+      });
+    }
+
+    // ============================================================
+    // ÉTAPE 2: Créer le healthcare provider dans la base CLINIQUE
+    // ============================================================
     const [result] = await req.clinicDb.query(`
       INSERT INTO healthcare_providers (
         facility_id, email, password_hash, first_name, last_name, title,
         profession, specialties, adeli, rpps, order_number,
         role, permissions, phone, mobile, availability, color,
-        is_active, email_verified
+        team_id, is_active, email_verified, account_status, invitation_token, invitation_expires_at
       ) VALUES (
         :facility_id, :email, :password_hash, :first_name, :last_name, :title,
         :profession, :specialties, :adeli, :rpps, :order_number,
         :role, :permissions, :phone, :mobile, :availability, :color,
-        :is_active, :email_verified
+        :team_id, :is_active, :email_verified, :account_status, :invitation_token, :invitation_expires_at
       ) RETURNING
         id, facility_id, email, first_name, last_name, title,
         profession, specialties, adeli, rpps, order_number,
         role, permissions, phone, mobile, availability, color,
-        is_active, email_verified, created_at, updated_at
+        team_id, is_active, email_verified, account_status, created_at, updated_at
     `, {
       replacements: {
-        ...value,
-        facility_id: req.clinicId,  // Use clinic ID from authentication context
+        facility_id: req.clinicId,
+        email: value.email.toLowerCase(),
         password_hash: hashedPassword,
+        first_name: value.first_name,
+        last_name: value.last_name,
+        title: value.title || null,
+        profession: value.profession,
         specialties: JSON.stringify(value.specialties || []),
+        adeli: value.adeli || null,
+        rpps: value.rpps || null,
+        order_number: value.order_number || null,
+        role: value.role,
         permissions: JSON.stringify(value.permissions || {}),
-        availability: JSON.stringify(value.availability || {})
+        phone: value.phone || null,
+        mobile: value.mobile || null,
+        availability: JSON.stringify(value.availability || {}),
+        color: value.color || 'blue',
+        team_id: value.team_id || null,
+        is_active: value.is_active !== false,
+        email_verified: !value.send_invitation,
+        account_status: accountStatus,
+        invitation_token: invitationToken,
+        invitation_expires_at: invitationExpiresAt
       }
     });
 
-    res.status(201).json({
-      success: true,
-      data: result[0],
-      message: 'Healthcare provider created successfully'
-    });
+    const createdProvider = result[0];
+    console.log('[healthcareProviders] Healthcare provider created in clinic DB:', createdProvider?.id);
+
+    // ============================================================
+    // ÉTAPE 3: Créer la membership dans la base CENTRALE (pour auth)
+    // ============================================================
+    try {
+      await UserClinicMembership.upsertMembership({
+        email: value.email.toLowerCase(),
+        companyId: req.clinicId,
+        providerId: createdProvider.id,
+        roleInClinic: value.role,
+        isPrimary: false, // Not primary by default
+        displayName: `${value.first_name} ${value.last_name}`.trim(),
+        isActive: value.is_active !== false
+      });
+      console.log('[healthcareProviders] Membership created in central DB for:', value.email);
+    } catch (membershipError) {
+      console.error('[healthcareProviders] Failed to create membership:', membershipError);
+      // Don't fail the request - provider is created, just log the error
+    }
+
+    // Si mode invitation, envoyer l'email
+    if (value.send_invitation && invitationToken) {
+      // Get company locale for invitation link
+      const company = await Company.findByPk(req.clinicId);
+      const locale = company?.locale || 'fr-FR';
+      // Extract language code from locale (e.g., 'fr-FR' -> 'fr', 'es-ES' -> 'es')
+      const language = locale.split('-')[0].toLowerCase();
+      const invitationLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/${locale}/set-password?token=${invitationToken}`;
+      console.log('[healthcareProviders] Invitation link:', invitationLink);
+
+      // Send invitation email
+      try {
+        await emailService.sendInvitationEmail({
+          email: value.email.toLowerCase(),
+          firstName: value.first_name,
+          lastName: value.last_name,
+          clinicName: company?.name || 'Clinic',
+          role: value.role,
+          invitationUrl: invitationLink,
+          expiresAt: invitationExpiresAt,
+          language: language
+        });
+        console.log('[healthcareProviders] Invitation email sent successfully to:', value.email);
+      } catch (emailError) {
+        console.error('[healthcareProviders] Failed to send invitation email:', emailError);
+        // Don't fail the request - provider is created, just log the error
+      }
+
+      res.status(201).json({
+        success: true,
+        data: {
+          ...createdProvider,
+          invitation_link: invitationLink // TEMPORAIRE - à retirer en production
+        },
+        message: 'Utilisateur créé avec succès. Email d\'invitation envoyé.'
+      });
+    } else {
+      res.status(201).json({
+        success: true,
+        data: createdProvider,
+        message: 'Healthcare provider created successfully'
+      });
+    }
   } catch (error) {
     console.error('[healthcareProviders] Error creating provider:', error);
 

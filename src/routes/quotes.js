@@ -17,6 +17,7 @@ const express = require('express');
 const { Quote, Client, DocumentItem, Invoice } = require('../models');
 const { logger } = require('../utils/logger');
 const Joi = require('joi');
+const { validateQuery, schemas } = require('../utils/validationSchemas');
 
 const router = express.Router();
 
@@ -50,9 +51,9 @@ const quoteSchema = Joi.object({
  * @desc Get all quotes for company
  * @access Private
  */
-router.get('/', async (req, res, next) => {
+router.get('/', validateQuery(schemas.pagination), async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, status, clientId, search } = req.query;
+    const { page, limit, status, clientId, search } = req.query;
     const offset = (page - 1) * limit;
 
     const whereClause = {

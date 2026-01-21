@@ -10,6 +10,7 @@ const { Company, User, Client, Invoice, Quote } = require('../models');
 const { logger } = require('../utils/logger');
 const Joi = require('joi');
 const { Op } = require('sequelize');
+const { validateQuery, validateParams, validateBody, schemas } = require('../utils/validationSchemas');
 
 const router = express.Router();
 
@@ -141,13 +142,10 @@ router.get('/dashboard', requireSuperAdmin, async (req, res, next) => {
  * @desc Get all companies with pagination and filters
  * @access Super Admin
  */
-router.get('/companies', requireSuperAdmin, async (req, res, next) => {
+router.get('/companies', requireSuperAdmin, validateQuery(schemas.adminCompaniesQuery), async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const { page, limit, search, country } = req.query;
     const offset = (page - 1) * limit;
-    const search = req.query.search;
-    const country = req.query.country;
 
     let whereClause = {};
 
@@ -281,15 +279,10 @@ router.post('/companies', requireSuperAdmin, async (req, res, next) => {
  * @desc Get all users across all companies with pagination and filters
  * @access Super Admin
  */
-router.get('/users', requireSuperAdmin, async (req, res, next) => {
+router.get('/users', requireSuperAdmin, validateQuery(schemas.adminUsersQuery), async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const { page, limit, search, role, companyId, isActive } = req.query;
     const offset = (page - 1) * limit;
-    const search = req.query.search;
-    const role = req.query.role;
-    const companyId = req.query.companyId;
-    const isActive = req.query.isActive;
 
     let whereClause = {};
 
@@ -433,7 +426,7 @@ router.post('/users', requireSuperAdmin, async (req, res, next) => {
  * @desc Update user permissions and details
  * @access Super Admin
  */
-router.put('/users/:id', requireSuperAdmin, async (req, res, next) => {
+router.put('/users/:id', requireSuperAdmin, validateParams(schemas.uuidParam), validateBody(schemas.adminUserUpdate), async (req, res, next) => {
   try {
     const userId = req.params.id;
     const updates = req.body;
@@ -449,7 +442,35 @@ router.put('/users/:id', requireSuperAdmin, async (req, res, next) => {
       });
     }
 
-    // Mise à jour
+    // Protéger les super_admin contre les modifications dangereuses
+    if (user.role === 'super_admin') {
+      // Vérifier si on essaie de changer le rôle ou de désactiver
+      if (updates.role && updates.role !== 'super_admin') {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Cannot modify super_admin role',
+            details: 'Le rôle des comptes super_admin ne peut pas être modifié via l\'API. Les super_admin doivent être supprimés directement en base de données.',
+            userId,
+            email: user.email
+          }
+        });
+      }
+
+      if (updates.isActive === false) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Cannot deactivate super_admin account',
+            details: 'Les comptes super_admin ne peuvent pas être désactivés via l\'API. Ils doivent être supprimés directement en base de données.',
+            userId,
+            email: user.email
+          }
+        });
+      }
+    }
+
+    // Mise à jour (sécurisée pour les super_admin)
     await user.update({
       role: updates.role || user.role,
       permissions: updates.permissions || user.permissions,
@@ -511,6 +532,25 @@ router.delete('/companies/:id', requireSuperAdmin, async (req, res, next) => {
       const { Client: ClientModel } = require('../models');
       const sequelize = require('../config/database').sequelize;
 
+      // Vérifier s'il y a des super_admin dans cette company
+      const superAdmins = await User.findAll({
+        where: {
+          company_id: companyId,
+          role: 'super_admin'
+        }
+      });
+
+      if (superAdmins.length > 0) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Cannot delete company with super_admin users',
+            details: `Cette company contient ${superAdmins.length} super_admin(s) et ne peut pas être supprimée. Les comptes super_admin peuvent uniquement être supprimés directement en base de données.`,
+            superAdmins: superAdmins.map(u => ({ id: u.id, email: u.email }))
+          }
+        });
+      }
+
       // Supprimer les données de la clinique
       await User.destroy({ where: { company_id: companyId } });
       await ClientModel.destroy({ where: { company_id: companyId } });
@@ -532,6 +572,25 @@ router.delete('/companies/:id', requireSuperAdmin, async (req, res, next) => {
       });
     } else {
       // SOFT DELETE: Désactivation (production)
+      // Vérifier s'il y a des super_admin dans cette company
+      const superAdmins = await User.findAll({
+        where: {
+          company_id: companyId,
+          role: 'super_admin'
+        }
+      });
+
+      if (superAdmins.length > 0) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Cannot deactivate company with super_admin users',
+            details: `Cette company contient ${superAdmins.length} super_admin(s) et ne peut pas être désactivée. Les comptes super_admin doivent être supprimés directement en base de données avant de désactiver la company.`,
+            superAdmins: superAdmins.map(u => ({ id: u.id, email: u.email }))
+          }
+        });
+      }
+
       await company.update({
         is_active: false,
         deleted_at: new Date()
@@ -707,6 +766,153 @@ router.delete('/companies/:id/database-data', requireSuperAdmin, async (req, res
 });
 
 /**
+ * @route GET /api/v1/admin/clinics/:id/check-integrity
+ * @desc Check the integrity of a clinic database
+ * @desc Verifies database exists, is accessible, and has all required tables
+ * @access Super Admin
+ */
+router.get('/clinics/:id/check-integrity', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const clinicId = req.params.id;
+
+    // Verify company exists
+    const company = await Company.findByPk(clinicId);
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: 'Company not found',
+          details: 'The specified company does not exist'
+        }
+      });
+    }
+
+    // Check clinic database integrity
+    const clinicProvisioningService = require('../services/clinicProvisioningService');
+    const integrity = await clinicProvisioningService.checkClinicDatabaseIntegrity(clinicId);
+
+    logger.info(`Clinic database integrity check completed for: ${clinicId}`, {
+      isHealthy: integrity.isHealthy,
+      exists: integrity.exists,
+      accessible: integrity.accessible
+    });
+
+    res.json({
+      success: true,
+      data: {
+        clinicId,
+        clinicName: company.name,
+        integrity: {
+          exists: integrity.exists,
+          accessible: integrity.accessible,
+          tablesCount: integrity.tablesCount,
+          isHealthy: integrity.isHealthy,
+          missingTables: integrity.missingTables || [],
+          errors: integrity.errors || []
+        },
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error checking clinic database integrity:', error);
+    next(error);
+  }
+});
+
+/**
+ * @route POST /api/v1/admin/clinics/:id/repair
+ * @desc Repair or recreate a broken clinic database
+ * @desc Fixes incomplete databases, missing tables, or creates from scratch if needed
+ * @access Super Admin
+ */
+router.post('/clinics/:id/repair', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const clinicId = req.params.id;
+
+    // Verify company exists
+    const company = await Company.findByPk(clinicId);
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: 'Company not found',
+          details: 'The specified company does not exist'
+        }
+      });
+    }
+
+    logger.info(`Starting clinic database repair for: ${clinicId}`, {
+      clinicName: company.name,
+      country: company.country
+    });
+
+    // Check current integrity
+    const clinicProvisioningService = require('../services/clinicProvisioningService');
+    const initialIntegrity = await clinicProvisioningService.checkClinicDatabaseIntegrity(clinicId);
+
+    if (initialIntegrity.isHealthy) {
+      return res.json({
+        success: true,
+        message: 'Clinic database is already healthy - no repair needed',
+        data: {
+          clinicId,
+          clinicName: company.name,
+          integrity: initialIntegrity,
+          repaired: false
+        }
+      });
+    }
+
+    // Attempt repair
+    const repairResult = await clinicProvisioningService.repairClinicDatabase(
+      clinicId,
+      company.name,
+      company.country
+    );
+
+    logger.info(`Clinic database repair completed for: ${clinicId}`, {
+      success: repairResult.success
+    });
+
+    res.json({
+      success: true,
+      message: 'Clinic database repaired successfully',
+      data: {
+        clinicId,
+        clinicName: company.name,
+        beforeRepair: {
+          exists: initialIntegrity.exists,
+          accessible: initialIntegrity.accessible,
+          tablesCount: initialIntegrity.tablesCount,
+          missingTables: initialIntegrity.missingTables || []
+        },
+        afterRepair: {
+          exists: repairResult.integrity?.exists || true,
+          accessible: repairResult.integrity?.accessible || true,
+          tablesCount: repairResult.integrity?.tablesCount || 0,
+          isHealthy: repairResult.integrity?.isHealthy || true
+        },
+        repaired: true,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error repairing clinic database:', error);
+
+    return res.status(500).json({
+      success: false,
+      error: {
+        message: 'Failed to repair clinic database',
+        details: error.message,
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+});
+
+/**
  * @route GET /api/v1/admin/databases
  * @desc List all clinic databases with their status
  * @access Super Admin
@@ -715,7 +921,7 @@ router.get('/databases', requireSuperAdmin, async (req, res, next) => {
   try {
     // Récupérer toutes les cliniques avec les infos de leurs bases
     const companies = await Company.findAll({
-      attributes: ['id', 'name', 'country', 'is_active', 'created_at', 'deleted_at'],
+      attributes: ['id', 'name', 'country', 'created_at', 'updated_at'],
       raw: true,
       order: [['created_at', 'DESC']]
     });
@@ -726,9 +932,9 @@ router.get('/databases', requireSuperAdmin, async (req, res, next) => {
       companyId: company.id,
       companyName: company.name,
       country: company.country,
-      status: company.is_active ? 'active' : 'inactive',
+      status: 'active',
       createdAt: company.created_at,
-      deactivatedAt: company.deleted_at
+      deactivatedAt: null
     }));
 
     res.json({
@@ -801,14 +1007,12 @@ router.post('/services/control', requireSuperAdmin, async (req, res, next) => {
       }
     } else if (service === 'frontend') {
       if (action === 'stop') {
-        exec('pkill -f "PORT=3000 npm start"', (error) => {
-          if (error && error.code !== 0) {
-            logger.warn('Frontend might not have been running');
-          }
+        exec('pkill -f "medical-pro.*npm start" || pkill -P $(lsof -t -i :3000 2>/dev/null) 2>/dev/null', (error) => {
+          logger.info('Frontend stop signal sent');
         });
         result = { service: 'frontend', action: 'stop', timestamp: new Date() };
       } else if (action === 'restart') {
-        exec('pkill -f "PORT=3000 npm start"', (error) => {
+        exec('pkill -f "medical-pro.*npm start" || pkill -P $(lsof -t -i :3000 2>/dev/null) 2>/dev/null', (error) => {
           setTimeout(() => {
             spawn('bash', ['-c', 'cd /var/www/medical-pro && PORT=3000 npm start > /tmp/frontend.log 2>&1'], {
               detached: true,

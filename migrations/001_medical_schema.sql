@@ -63,7 +63,7 @@ CREATE TABLE healthcare_providers (
     order_number VARCHAR(50), -- Numéro d'ordre professionnel
 
     -- Role and permissions
-    role VARCHAR(50) NOT NULL DEFAULT 'practitioner' CHECK (role IN ('super_admin', 'admin', 'practitioner', 'nurse', 'secretary', 'readonly')),
+    role VARCHAR(50) NOT NULL DEFAULT 'practitioner' CHECK (role IN ('super_admin', 'admin', 'doctor', 'practitioner', 'specialist', 'nurse', 'secretary', 'readonly')),
     permissions JSONB DEFAULT '{}'::jsonb,
 
     -- Contact
