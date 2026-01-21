@@ -3,10 +3,13 @@
  * CRUD operations for patients with clinic-specific database isolation
  * Each request automatically uses req.clinicDb for data access
  *
+ * VISIBILITY MODES:
+ * - Option B (default): Users with PATIENTS_VIEW_ALL see all patients
+ * - Option A (future): Remove PATIENTS_VIEW_ALL to enable care team filtering
+ *
  * SECRET MÉDICAL:
- * Les patients ne sont visibles que par les praticiens faisant partie
- * de leur équipe de soins (patient_care_team).
- * Les admins/secrétaires voient tous les patients.
+ * When care team filtering is active (no PATIENTS_VIEW_ALL),
+ * patients are only visible to practitioners in their care team.
  */
 
 const express = require('express');
@@ -17,6 +20,7 @@ const { Op } = require('sequelize');
 const { getModel } = require('../base/ModelFactory');
 const { logger } = require('../utils/logger');
 const { PERMISSIONS } = require('../utils/permissionConstants');
+const { getPermissionsFromClinicRoles } = require('../middleware/permissions');
 
 const router = express.Router();
 
@@ -54,9 +58,21 @@ router.get('/', async (req, res, next) => {
     const Patient = await getModel(req.clinicDb, 'Patient');
     const PatientCareTeam = await getModel(req.clinicDb, 'PatientCareTeam');
 
-    // Déterminer si l'utilisateur doit voir tous les patients ou filtrés
-    const isAdmin = ['admin', 'super_admin', 'secretary'].includes(req.user.role);
-    const shouldFilterByCareTeam = !isAdmin || !showAll;
+    // Déterminer si l'utilisateur peut voir tous les patients
+    // Option B: PATIENTS_VIEW_ALL permission = voir tous les patients
+    // Option A (future): Retirer PATIENTS_VIEW_ALL = filtrage par équipe de soins
+    const userPermissions = await getPermissionsFromClinicRoles(req.user.companyId, req.user.role);
+    const canViewAllPatients = userPermissions.includes(PERMISSIONS.PATIENTS_VIEW_ALL) ||
+                               req.user.role === 'super_admin';
+
+    // Si l'utilisateur a PATIENTS_VIEW_ALL, pas de filtrage par équipe de soins
+    const shouldFilterByCareTeam = !canViewAllPatients;
+
+    logger.debug(`[Patients] Access check for user ${req.user.id}`, {
+      role: req.user.role,
+      canViewAllPatients,
+      shouldFilterByCareTeam
+    });
 
     // Construire le where clause
     const where = {};
@@ -168,12 +184,17 @@ router.get('/:id', async (req, res, next) => {
     const PatientCareTeam = await getModel(req.clinicDb, 'PatientCareTeam');
     const HealthcareProvider = await getModel(req.clinicDb, 'HealthcareProvider');
 
-    // Vérifier l'accès au patient
-    const isAdmin = ['admin', 'super_admin', 'secretary'].includes(req.user.role);
+    // Vérifier les permissions de l'utilisateur
+    // Option B: PATIENTS_VIEW_ALL = accès à tous les patients
+    // Option A (future): Sans PATIENTS_VIEW_ALL = filtrage par équipe de soins
+    const userPermissions = await getPermissionsFromClinicRoles(req.user.companyId, req.user.role);
+    const canViewAllPatients = userPermissions.includes(PERMISSIONS.PATIENTS_VIEW_ALL) ||
+                               req.user.role === 'super_admin';
 
-    // Pour les praticiens, trouver leur provider_id
-    let hasAccess = isAdmin;
-    if (!isAdmin) {
+    let hasAccess = canViewAllPatients;
+
+    // Si pas d'accès global, vérifier l'équipe de soins
+    if (!hasAccess) {
       const provider = await HealthcareProvider.findOne({
         where: { central_user_id: req.user.id },
         attributes: ['id']

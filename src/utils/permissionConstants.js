@@ -278,18 +278,23 @@ const ROLE_PERMISSIONS = {
   ],
 
   practitioner: [
-    // Praticien de santé: Accès limité aux données médicales nécessaires aux soins
+    // Praticien de santé: Accès aux données patients et médicales
+    // Option B (clinic-wide): Accès complet aux patients de la clinique
     PERMISSIONS.PATIENTS_VIEW,
+    PERMISSIONS.PATIENTS_CREATE,
     PERMISSIONS.PATIENTS_EDIT,
+    PERMISSIONS.PATIENTS_VIEW_ALL,        // Option B: voir tous les patients
 
     PERMISSIONS.APPOINTMENTS_VIEW,
     PERMISSIONS.APPOINTMENTS_CREATE,
     PERMISSIONS.APPOINTMENTS_EDIT,
 
-    // DONNÉES MÉDICALES LIMITÉES
+    // DONNÉES MÉDICALES - Accès complet pour les soins
     PERMISSIONS.MEDICAL_RECORDS_VIEW,
+    PERMISSIONS.MEDICAL_RECORDS_CREATE,   // Créer des entrées médicales
+    PERMISSIONS.MEDICAL_RECORDS_EDIT,     // Modifier les dossiers
     PERMISSIONS.MEDICAL_NOTES_CREATE,
-    PERMISSIONS.MEDICAL_ALLERGIES_VIEW,    // CRITIQUE: sécurité des soins
+    PERMISSIONS.MEDICAL_ALLERGIES_VIEW,   // CRITIQUE: sécurité des soins
     PERMISSIONS.MEDICAL_VITALS_VIEW,
     PERMISSIONS.MEDICAL_VITALS_EDIT,
     PERMISSIONS.MEDICAL_PRESCRIPTIONS_VIEW,
