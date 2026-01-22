@@ -144,7 +144,15 @@ class ClinicProvisioningService {
         'clinic_031_add_consent_fields.sql',
         'clinic_032_fix_consent_template_types_and_status.sql',
         'clinic_033_fix_prescriptions_schema.sql',
-        'clinic_034_add_operating_days_to_settings.sql'
+        'clinic_034_add_operating_days_to_settings.sql',
+        // Medical records fixes
+        'clinic_035_fix_medical_records_provider_id.sql',
+        'clinic_036_fix_medical_records_record_type_constraint.sql',
+        // Facility enhancements
+        'clinic_037_add_facility_number.sql',
+        'clinic_038_add_logo_url.sql',
+        // Default roles insertion
+        '025_insert_default_clinic_roles.sql'
       ];
 
       for (const migrationFile of migrationFiles) {
