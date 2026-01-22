@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const compression = require('compression');
+const path = require('path');
 const { RateLimiterMemory } = require('rate-limiter-flexible');
 
 const { logger, httpLoggerStream } = require('./src/utils/logger');
@@ -126,6 +127,16 @@ app.use(morgan('combined', { stream: httpLoggerStream }));
 
 // Region detection middleware (detects country from sub-domain)
 app.use(regionMiddleware());
+
+// Serve static files from uploads directory with CORS headers
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static(path.join(__dirname, 'uploads'), {
+  maxAge: '1d',
+  etag: true
+}));
 
 // Rate limiting
 app.use(rateLimitMiddleware);
