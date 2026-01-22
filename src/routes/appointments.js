@@ -29,6 +29,8 @@ const appointmentRoutes = clinicCrudRoutes('Appointment', {
   querySchema,
   displayName: 'Appointment',
   searchFields: ['reason'],
+  // Sort by appointment_date DESC to show recent AND past appointments
+  defaultOrder: [['appointment_date', 'DESC'], ['start_time', 'DESC']],
 
   // Permission configuration - uses clinic_roles as source of truth
   permissions: {
@@ -40,7 +42,18 @@ const appointmentRoutes = clinicCrudRoutes('Appointment', {
 
   // Include patient data in appointment responses
   includeRelations: async (clinicDb) => {
+    // Load both models to ensure associations are setup
+    const Appointment = await getModel(clinicDb, 'Appointment');
     const Patient = await getModel(clinicDb, 'Patient');
+
+    // Ensure association is established (in case of race condition)
+    if (!Appointment.associations?.patient) {
+      Appointment.belongsTo(Patient, {
+        foreignKey: 'patient_id',
+        as: 'patient'
+      });
+    }
+
     return [
       {
         model: Patient,

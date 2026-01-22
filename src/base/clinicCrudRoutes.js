@@ -73,7 +73,10 @@ function createClinicCrudRoutes(modelName, config = {}) {
     },
     // Relations to include in queries (function that receives clinicDb and returns include array)
     // Example: includeRelations: async (clinicDb) => [{ model: await getModel(clinicDb, 'Patient'), as: 'patient' }]
-    includeRelations = null
+    includeRelations = null,
+    // Default sort order for list queries
+    // Example: [['appointment_date', 'DESC'], ['start_time', 'DESC']]
+    defaultOrder = [['created_at', 'DESC']]
   } = config;
 
   /**
@@ -141,7 +144,7 @@ function createClinicCrudRoutes(modelName, config = {}) {
         where,
         limit,
         offset,
-        order: [['created_at', 'DESC']],
+        order: defaultOrder,
         subQuery: false
       };
 
@@ -455,7 +458,7 @@ function createClinicCrudRoutes(modelName, config = {}) {
         where,
         limit,
         offset,
-        order: [['created_at', 'DESC']],
+        order: defaultOrder,
         subQuery: false
       });
 
