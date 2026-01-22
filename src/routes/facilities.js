@@ -76,7 +76,7 @@ router.get('/current', async (req, res) => {
   try {
     const [facilities] = await req.clinicDb.query(`
       SELECT
-        id, name, facility_type, finess, siret, adeli, rpps,
+        id, name, facility_type, facility_number, finess, siret, adeli, rpps,
         address_line1, address_line2, postal_code, city, country,
         phone, email, website,
         specialties, services, settings,
@@ -151,11 +151,11 @@ router.put('/current', async (req, res) => {
       SET ${updates.join(', ')}
       WHERE id = :clinicId
       RETURNING
-        id, name, facility_type, finess, siret, adeli, rpps,
+        id, name, facility_type, facility_number, finess, siret, adeli, rpps,
         address_line1, address_line2, postal_code, city, country,
         phone, email, website,
         specialties, services,
-        timezone, language,
+        timezone, language, logo_url,
         is_active, created_at, updated_at
     `, { replacements });
 

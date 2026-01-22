@@ -363,6 +363,7 @@ module.exports.updateFacilitySchema = Joi.object({
   facility_type: Joi.string()
     .valid('cabinet', 'clinique', 'hopital', 'centre_sante', 'maison_medicale')
     .optional(),
+  facility_number: Joi.string().max(50).allow('').optional(),
 
   // Registration
   finess: Joi.string().max(9).allow('').optional(),
