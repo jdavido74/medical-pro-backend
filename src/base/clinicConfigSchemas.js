@@ -402,5 +402,6 @@ module.exports.queryParamsSchema = Joi.object({
   limit: Joi.number().integer().min(1).max(100).default(20),
   search: Joi.string().max(255).allow('').optional(),
   role: Joi.string().valid('super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly').optional(),
-  is_active: Joi.boolean().optional()
+  is_active: Joi.boolean().optional(),
+  include_deleted: Joi.boolean().optional().default(false)
 });

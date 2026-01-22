@@ -188,7 +188,7 @@ function createHealthcareProviderModel(clinicDb) {
       allowNull: true,
       defaultValue: 'active',
       validate: {
-        isIn: [['pending', 'active', 'suspended', 'locked']]
+        isIn: [['pending', 'active', 'suspended', 'locked', 'deleted']]
       }
     },
     invitation_token: {
@@ -198,6 +198,23 @@ function createHealthcareProviderModel(clinicDb) {
     invitation_expires_at: {
       type: DataTypes.DATE,
       allowNull: true
+    },
+
+    // Soft delete fields
+    deleted_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Timestamp of soft deletion'
+    },
+    deleted_by: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      comment: 'ID of the user who performed the deletion'
+    },
+    reassigned_to: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      comment: 'ID of the provider who received reassigned patients/appointments'
     }
   }, {
     tableName: 'healthcare_providers',
@@ -254,16 +271,72 @@ function createHealthcareProviderModel(clinicDb) {
 
   // Static methods
   /**
-   * Find active providers
+   * Find active providers (excludes deleted)
    */
   HealthcareProvider.findActive = async function(options = {}) {
+    const { Op } = require('sequelize');
     return await this.findAll({
       where: {
         is_active: true,
+        account_status: { [Op.ne]: 'deleted' },
         ...options.where
       },
       ...options
     });
+  };
+
+  /**
+   * Find deleted providers (for admin restore functionality)
+   */
+  HealthcareProvider.findDeleted = async function(options = {}) {
+    return await this.findAll({
+      where: {
+        account_status: 'deleted',
+        ...options.where
+      },
+      order: [['deleted_at', 'DESC']],
+      ...options
+    });
+  };
+
+  /**
+   * Soft delete a provider with optional reassignment
+   */
+  HealthcareProvider.softDelete = async function(providerId, deletedBy, reassignToId = null) {
+    const provider = await this.findByPk(providerId);
+    if (!provider) {
+      throw new Error('Provider not found');
+    }
+
+    await provider.update({
+      account_status: 'deleted',
+      is_active: false,
+      deleted_at: new Date(),
+      deleted_by: deletedBy,
+      reassigned_to: reassignToId
+    });
+
+    return provider;
+  };
+
+  /**
+   * Restore a deleted provider
+   */
+  HealthcareProvider.restore = async function(providerId) {
+    const provider = await this.findByPk(providerId);
+    if (!provider) {
+      throw new Error('Provider not found');
+    }
+
+    await provider.update({
+      account_status: 'active',
+      is_active: true,
+      deleted_at: null,
+      deleted_by: null,
+      reassigned_to: null
+    });
+
+    return provider;
   };
 
   /**

@@ -70,10 +70,16 @@ CREATE TABLE healthcare_providers (
     phone VARCHAR(20),
     mobile VARCHAR(20),
 
-    -- Authentication
+    -- Authentication and account status
     last_login TIMESTAMP,
     is_active BOOLEAN DEFAULT true,
     email_verified BOOLEAN DEFAULT false,
+    account_status VARCHAR(50) DEFAULT 'active' CHECK (account_status IN ('pending', 'active', 'suspended', 'locked', 'deleted')),
+
+    -- Soft delete fields
+    deleted_at TIMESTAMP,
+    deleted_by UUID,
+    reassigned_to UUID,
 
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -330,6 +336,8 @@ CREATE INDEX idx_medical_facilities_finess ON medical_facilities(finess);
 CREATE INDEX idx_medical_facilities_active ON medical_facilities(is_active);
 CREATE INDEX idx_healthcare_providers_facility ON healthcare_providers(facility_id);
 CREATE INDEX idx_healthcare_providers_email ON healthcare_providers(email);
+CREATE INDEX idx_healthcare_providers_active ON healthcare_providers(facility_id) WHERE account_status != 'deleted';
+CREATE INDEX idx_healthcare_providers_deleted ON healthcare_providers(facility_id, deleted_at) WHERE deleted_at IS NOT NULL;
 CREATE INDEX idx_patients_facility ON patients(facility_id);
 CREATE INDEX idx_patients_patient_number ON patients(patient_number);
 CREATE INDEX idx_patients_social_security ON patients(social_security);
