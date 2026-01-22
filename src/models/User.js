@@ -134,91 +134,10 @@ const User = sequelize.define('User', {
         user.password_hash = await bcrypt.hash(user.password_hash, 12);
       }
 
-      // Définir les permissions par défaut selon le rôle
-      if (!user.permissions || Object.keys(user.permissions).length === 0) {
-        const defaultPermissions = {
-          super_admin: {
-            // Global admin - all companies
-            dashboard: { read: true, write: true },
-            clients: { read: true, write: true, delete: true },
-            invoices: { read: true, write: true, delete: true },
-            quotes: { read: true, write: true, delete: true },
-            analytics: { read: true, write: true },
-            settings: { read: true, write: true },
-            users: { read: true, write: true, delete: true },
-            companies: { read: true, write: true, delete: true },
-            global_admin: { read: true, write: true, delete: true },
-            // Medical
-            patients: { read: true, write: true, delete: true },
-            practitioners: { read: true, write: true, delete: true },
-            appointments: { read: true, write: true, delete: true },
-            documents: { read: true, write: true, delete: true },
-            consents: { read: true, write: true, delete: true }
-          },
-          admin: {
-            // Clinic admin
-            dashboard: { read: true, write: true },
-            clients: { read: true, write: true, delete: true },
-            invoices: { read: true, write: true, delete: true },
-            quotes: { read: true, write: true, delete: true },
-            analytics: { read: true, write: true },
-            settings: { read: true, write: true },
-            users: { read: true, write: true, delete: true },
-            // Medical
-            patients: { read: true, write: true, delete: true },
-            practitioners: { read: true, write: true, delete: true },
-            appointments: { read: true, write: true, delete: true },
-            documents: { read: true, write: true, delete: true },
-            consents: { read: true, write: true, delete: true }
-          },
-          doctor: {
-            // Practitioner - can manage their appointments
-            dashboard: { read: true, write: false },
-            appointments: { read: true, write: true, delete: false },
-            patients: { read: true, write: true, delete: false },
-            documents: { read: true, write: true, delete: false },
-            consents: { read: true, write: false, delete: false },
-            analytics: { read: true, write: false },
-            // Cannot access billing or admin
-            clients: { read: false, write: false, delete: false },
-            invoices: { read: false, write: false, delete: false },
-            quotes: { read: false, write: false, delete: false },
-            settings: { read: false, write: false },
-            users: { read: false, write: false, delete: false }
-          },
-          secretary: {
-            // Administrative staff
-            dashboard: { read: true, write: false },
-            appointments: { read: true, write: true, delete: true },
-            patients: { read: true, write: true, delete: false },
-            documents: { read: true, write: true, delete: true },
-            consents: { read: true, write: false, delete: false },
-            clients: { read: true, write: true, delete: true },
-            invoices: { read: true, write: true, delete: true },
-            quotes: { read: true, write: true, delete: true },
-            analytics: { read: true, write: false },
-            // Cannot modify settings or users
-            settings: { read: false, write: false },
-            users: { read: false, write: false, delete: false }
-          },
-          readonly: {
-            // Read-only access
-            dashboard: { read: true, write: false },
-            patients: { read: true, write: false, delete: false },
-            appointments: { read: true, write: false, delete: false },
-            documents: { read: true, write: false, delete: false },
-            consents: { read: true, write: false, delete: false },
-            clients: { read: true, write: false, delete: false },
-            invoices: { read: true, write: false, delete: false },
-            quotes: { read: true, write: false, delete: false },
-            analytics: { read: true, write: false },
-            settings: { read: false, write: false },
-            users: { read: false, write: false, delete: false }
-          }
-        };
-
-        user.permissions = defaultPermissions[user.role] || defaultPermissions.readonly;
-      }
+      // NOTE: Les permissions individuelles ne sont plus définies ici.
+      // La source de vérité pour les permissions est la table clinic_roles.
+      // Les permissions sont chargées depuis clinic_roles au login via getPermissionsFromClinicRoles().
+      // user.permissions reste null/vide pour les nouveaux utilisateurs.
     },
     beforeUpdate: async (user, options) => {
       // Hasher le mot de passe avant mise à jour si modifié
