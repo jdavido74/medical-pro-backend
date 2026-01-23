@@ -40,17 +40,25 @@ const appointmentRoutes = clinicCrudRoutes('Appointment', {
     delete: PERMISSIONS.APPOINTMENTS_DELETE
   },
 
-  // Include patient data in appointment responses
+  // Include patient and practitioner data in appointment responses
   includeRelations: async (clinicDb) => {
-    // Load both models to ensure associations are setup
+    // Load models to ensure associations are setup
     const Appointment = await getModel(clinicDb, 'Appointment');
     const Patient = await getModel(clinicDb, 'Patient');
+    const HealthcareProvider = await getModel(clinicDb, 'HealthcareProvider');
 
-    // Ensure association is established (in case of race condition)
+    // Ensure associations are established (in case of race condition)
     if (!Appointment.associations?.patient) {
       Appointment.belongsTo(Patient, {
         foreignKey: 'patient_id',
         as: 'patient'
+      });
+    }
+
+    if (!Appointment.associations?.healthcare_provider) {
+      Appointment.belongsTo(HealthcareProvider, {
+        foreignKey: 'provider_id',
+        as: 'healthcare_provider'
       });
     }
 
@@ -59,6 +67,11 @@ const appointmentRoutes = clinicCrudRoutes('Appointment', {
         model: Patient,
         as: 'patient',
         attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'patient_number']
+      },
+      {
+        model: HealthcareProvider,
+        as: 'healthcare_provider',
+        attributes: ['id', 'first_name', 'last_name', 'profession', 'specialties', 'role']
       }
     ];
   },
