@@ -161,9 +161,31 @@ router.get('/:id', async (req, res) => {
  * Creates:
  * 1. Healthcare provider in clinic database (with password)
  * 2. Membership entry in central database (for multi-clinic auth lookup)
+ *
+ * Authorization:
+ * - Only super_admin and admin can create users
+ * - super_admin can assign any role
+ * - admin can assign any role except super_admin
  */
 router.post('/', async (req, res) => {
   try {
+    // ============================================================
+    // AUTHORIZATION CHECK: Only admin/super_admin can create users
+    // ============================================================
+    const currentUserRole = req.user?.role;
+    const allowedCreatorRoles = ['super_admin', 'admin'];
+
+    if (!allowedCreatorRoles.includes(currentUserRole)) {
+      console.warn(`[healthcareProviders] Unauthorized create attempt by role: ${currentUserRole}`);
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Accès refusé',
+          details: 'Vous n\'avez pas la permission de créer des utilisateurs'
+        }
+      });
+    }
+
     // Validate request body
     const { error, value } = createHealthcareProviderSchema.validate(req.body);
     if (error) {
@@ -172,6 +194,53 @@ router.post('/', async (req, res) => {
         error: { message: 'Validation Error', details: error.details[0].message }
       });
     }
+
+    // ============================================================
+    // AUTHORIZATION CHECK: Validate role assignment permissions
+    // ============================================================
+    const requestedRole = value.role;
+
+    // Hierarchy: super_admin > admin > physician > practitioner > secretary > readonly
+    const roleHierarchy = {
+      'super_admin': 100,
+      'admin': 90,
+      'physician': 70,
+      'practitioner': 50,
+      'secretary': 30,
+      'readonly': 10
+    };
+
+    // super_admin can assign any role
+    // admin can assign any role EXCEPT super_admin
+    if (currentUserRole === 'admin' && requestedRole === 'super_admin') {
+      console.warn(`[healthcareProviders] Admin tried to create super_admin`);
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Accès refusé',
+          details: 'Seul un super administrateur peut créer un autre super administrateur'
+        }
+      });
+    }
+
+    // Additional check: Cannot assign a role higher than your own (except super_admin who can do anything)
+    if (currentUserRole !== 'super_admin') {
+      const currentLevel = roleHierarchy[currentUserRole] || 0;
+      const requestedLevel = roleHierarchy[requestedRole] || 0;
+
+      if (requestedLevel > currentLevel) {
+        console.warn(`[healthcareProviders] User ${currentUserRole} tried to assign higher role ${requestedRole}`);
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Accès refusé',
+            details: 'Vous ne pouvez pas attribuer un rôle supérieur au vôtre'
+          }
+        });
+      }
+    }
+
+    console.log(`[healthcareProviders] User ${currentUserRole} creating user with role ${requestedRole}`);
 
     const crypto = require('crypto');
     let hashedPassword = null;
@@ -348,6 +417,10 @@ router.post('/', async (req, res) => {
 /**
  * PUT /api/v1/healthcare-providers/:id
  * Update healthcare provider
+ *
+ * Authorization for role changes:
+ * - Only super_admin and admin can change roles
+ * - admin cannot assign super_admin role
  */
 router.put('/:id', async (req, res) => {
   try {
@@ -360,6 +433,47 @@ router.put('/:id', async (req, res) => {
         success: false,
         error: { message: 'Validation Error', details: error.details[0].message }
       });
+    }
+
+    // ============================================================
+    // AUTHORIZATION CHECK: If role is being changed, validate permissions
+    // ============================================================
+    if (value.role) {
+      const currentUserRole = req.user?.role;
+      const allowedRoleChangers = ['super_admin', 'admin'];
+
+      if (!allowedRoleChangers.includes(currentUserRole)) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Accès refusé',
+            details: 'Vous n\'avez pas la permission de modifier les rôles'
+          }
+        });
+      }
+
+      // admin cannot assign super_admin role
+      if (currentUserRole === 'admin' && value.role === 'super_admin') {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Accès refusé',
+            details: 'Seul un super administrateur peut attribuer le rôle super administrateur'
+          }
+        });
+      }
+
+      // Prevent self-role-downgrade for protection
+      const currentUserId = req.user?.providerId || req.user?.userId;
+      if (id === currentUserId && value.role !== currentUserRole) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            message: 'Action non autorisée',
+            details: 'Vous ne pouvez pas modifier votre propre rôle'
+          }
+        });
+      }
     }
 
     // Build SET clause dynamically

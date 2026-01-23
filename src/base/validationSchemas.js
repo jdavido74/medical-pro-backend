@@ -309,6 +309,12 @@ module.exports.createMedicalRecordSchema = Joi.object({
   }),
   provider_id: Joi.string().uuid().optional(),
 
+  // Date de consultation (éditable, par défaut = date de création)
+  record_date: Joi.date().iso().allow(null).optional(),
+
+  // Assistant optionnel (infirmière, aide-soignant, etc.)
+  assistant_provider_id: Joi.string().uuid().allow(null).optional(),
+
   // Record type
   record_type: Joi.string()
     .valid('consultation', 'examination', 'treatment', 'follow_up', 'emergency', 'prescription', 'lab_result', 'imaging', 'note')
@@ -405,6 +411,13 @@ module.exports.createMedicalRecordSchema = Joi.object({
 
 module.exports.updateMedicalRecordSchema = Joi.object({
   // Can update most fields except patient_id
+
+  // Date de consultation (éditable)
+  record_date: Joi.date().iso().allow(null).optional(),
+
+  // Assistant optionnel (infirmière, aide-soignant, etc.)
+  assistant_provider_id: Joi.string().uuid().allow(null, '').optional(),
+
   record_type: Joi.string()
     .valid('consultation', 'examination', 'treatment', 'follow_up', 'emergency', 'prescription', 'lab_result', 'imaging', 'note')
     .optional(),

@@ -51,6 +51,25 @@ function createMedicalRecordModel(clinicDb) {
       onDelete: 'SET NULL'
     },
 
+    // Date et heure de consultation (éditable, par défaut = date/heure de création)
+    record_date: {
+      type: DataTypes.DATE, // TIMESTAMP WITH TIME ZONE
+      allowNull: true,
+      comment: 'Date et heure de consultation (éditable) - Peut différer de created_at'
+    },
+
+    // Assistant optionnel (infirmière, aide-soignant, etc.)
+    assistant_provider_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'healthcare_providers',
+        key: 'id'
+      },
+      onDelete: 'SET NULL',
+      comment: 'Assistant ayant participé à la consultation (infirmier(e), aide-soignant(e), etc.)'
+    },
+
     // Record number (auto-generated if not provided)
     record_number: {
       type: DataTypes.STRING(50),
@@ -257,7 +276,9 @@ function createMedicalRecordModel(clinicDb) {
       { fields: ['facility_id'] },
       { fields: ['patient_id'] },
       { fields: ['provider_id'] },
+      { fields: ['assistant_provider_id'] },
       { fields: ['record_type'] },
+      { fields: ['record_date'] },
       { fields: ['created_at'] },
       { fields: ['archived'] },
       { fields: ['patient_id', 'created_at'] },
@@ -274,6 +295,10 @@ function createMedicalRecordModel(clinicDb) {
         // Auto-set consultation_date before validation if not provided
         if (!record.consultation_date) {
           record.consultation_date = new Date();
+        }
+        // Auto-set record_date from consultation_date if not provided
+        if (!record.record_date) {
+          record.record_date = record.consultation_date || new Date();
         }
       }
     }

@@ -151,6 +151,12 @@ class ClinicProvisioningService {
         // Facility enhancements
         'clinic_037_add_facility_number.sql',
         'clinic_038_add_logo_url.sql',
+        // Soft delete
+        'clinic_039_add_soft_delete_fields.sql',
+        // Medical records date and assistant
+        'clinic_040_add_medical_record_date_assistant.sql',
+        // Medical records datetime (include time)
+        'clinic_041_change_record_date_to_timestamp.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];
