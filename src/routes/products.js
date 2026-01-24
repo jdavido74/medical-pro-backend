@@ -9,8 +9,6 @@ const Joi = require('joi');
 const clinicCrudRoutes = require('../base/clinicCrudRoutes');
 const { getModel } = require('../base/ModelFactory');
 const { Op } = require('sequelize');
-const { authenticateToken } = require('../middleware/auth');
-const { getClinicDatabase } = require('../config/multitenancy');
 
 const router = express.Router();
 
@@ -214,10 +212,9 @@ router.use('/', productRoutes);
 /**
  * GET /catalog/families - Get all family items with their variants
  */
-router.get('/families', authenticateToken, async (req, res) => {
+router.get('/families', async (req, res) => {
   try {
-    const clinicDb = await getClinicDatabase(req.user.companyId);
-    const ProductService = await getModel(clinicDb, 'ProductService');
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
 
     const families = await ProductService.findAll({
       where: {
@@ -249,11 +246,10 @@ router.get('/families', authenticateToken, async (req, res) => {
 /**
  * POST /:id/variants - Add a variant to a family
  */
-router.post('/:id/variants', authenticateToken, async (req, res) => {
+router.post('/:id/variants', async (req, res) => {
   try {
     const { id } = req.params;
-    const clinicDb = await getClinicDatabase(req.user.companyId);
-    const ProductService = await getModel(clinicDb, 'ProductService');
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
 
     // Find parent
     const parent = await ProductService.findByPk(id);
@@ -309,11 +305,10 @@ router.post('/:id/variants', authenticateToken, async (req, res) => {
 /**
  * POST /:id/duplicate - Duplicate an item
  */
-router.post('/:id/duplicate', authenticateToken, async (req, res) => {
+router.post('/:id/duplicate', async (req, res) => {
   try {
     const { id } = req.params;
-    const clinicDb = await getClinicDatabase(req.user.companyId);
-    const ProductService = await getModel(clinicDb, 'ProductService');
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
 
     const original = await ProductService.findByPk(id);
     if (!original) {
@@ -352,10 +347,9 @@ router.post('/:id/duplicate', authenticateToken, async (req, res) => {
 /**
  * GET /catalog/stats - Get catalog statistics
  */
-router.get('/stats', authenticateToken, async (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
-    const clinicDb = await getClinicDatabase(req.user.companyId);
-    const ProductService = await getModel(clinicDb, 'ProductService');
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
 
     const [total, active, medications, treatments, services, families, variants] = await Promise.all([
       ProductService.count(),
@@ -395,10 +389,9 @@ router.get('/stats', authenticateToken, async (req, res) => {
 /**
  * GET /catalog/for-appointments - Get items that impact appointments
  */
-router.get('/for-appointments', authenticateToken, async (req, res) => {
+router.get('/for-appointments', async (req, res) => {
   try {
-    const clinicDb = await getClinicDatabase(req.user.companyId);
-    const ProductService = await getModel(clinicDb, 'ProductService');
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
 
     const items = await ProductService.findAll({
       where: {
