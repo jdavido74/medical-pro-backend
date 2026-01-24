@@ -254,7 +254,7 @@ module.exports = () => {
       as: 'quote_items'
     });
 
-    // Self-reference for family/variant relationship
+    // Self-reference for family/variant relationship (legacy, kept for compatibility)
     ProductService.belongsTo(ProductService, {
       foreignKey: 'parent_id',
       as: 'parent'
@@ -263,6 +263,14 @@ module.exports = () => {
     ProductService.hasMany(ProductService, {
       foreignKey: 'parent_id',
       as: 'variants'
+    });
+
+    // Tags association (new flexible grouping system)
+    ProductService.belongsToMany(models.Tag, {
+      through: 'product_tags',
+      foreignKey: 'product_service_id',
+      otherKey: 'tag_id',
+      as: 'tags'
     });
   };
 

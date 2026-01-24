@@ -148,10 +148,16 @@ const transformFromDb = (item) => {
     companyId: data.company_id,
     createdAt: data.created_at,
     updatedAt: data.updated_at,
-    // Include variants if loaded
+    // Include variants if loaded (legacy)
     variants: data.variants ? data.variants.map(transformFromDb) : undefined,
     parent: data.parent ? transformFromDb(data.parent) : undefined,
-    categories: data.categories || undefined
+    categories: data.categories || undefined,
+    // Include tags
+    tags: data.tags ? data.tags.map(tag => ({
+      id: tag.id,
+      name: tag.name,
+      color: tag.color
+    })) : undefined
   };
 };
 
@@ -422,6 +428,206 @@ router.get('/for-appointments', async (req, res) => {
     res.status(500).json({
       success: false,
       error: { message: 'Failed to fetch items' }
+    });
+  }
+});
+
+/**
+ * GET /:id/tags - Get tags for a product
+ */
+router.get('/:id/tags', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
+    const Tag = await getModel(req.clinicDb, 'Tag');
+
+    const product = await ProductService.findByPk(id, {
+      include: [{
+        model: Tag,
+        as: 'tags',
+        through: { attributes: [] }
+      }]
+    });
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Product not found' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: product.tags?.map(tag => ({
+        id: tag.id,
+        name: tag.name,
+        color: tag.color
+      })) || []
+    });
+  } catch (error) {
+    console.error('[products] Error fetching product tags:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch product tags' }
+    });
+  }
+});
+
+/**
+ * POST /:id/tags - Add tags to a product
+ */
+router.post('/:id/tags', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { tagIds } = req.body;
+
+    if (!Array.isArray(tagIds)) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'tagIds must be an array' }
+      });
+    }
+
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
+    const Tag = await getModel(req.clinicDb, 'Tag');
+
+    const product = await ProductService.findByPk(id);
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Product not found' }
+      });
+    }
+
+    // Verify all tags exist
+    const tags = await Tag.findAll({ where: { id: tagIds } });
+    if (tags.length !== tagIds.length) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'One or more tags not found' }
+      });
+    }
+
+    // Add tags (addTags handles duplicates)
+    await product.addTags(tags);
+
+    // Fetch updated tags
+    const updatedProduct = await ProductService.findByPk(id, {
+      include: [{
+        model: Tag,
+        as: 'tags',
+        through: { attributes: [] }
+      }]
+    });
+
+    res.json({
+      success: true,
+      data: updatedProduct.tags?.map(tag => ({
+        id: tag.id,
+        name: tag.name,
+        color: tag.color
+      })) || []
+    });
+  } catch (error) {
+    console.error('[products] Error adding tags:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to add tags' }
+    });
+  }
+});
+
+/**
+ * PUT /:id/tags - Replace all tags for a product
+ */
+router.put('/:id/tags', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { tagIds } = req.body;
+
+    if (!Array.isArray(tagIds)) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'tagIds must be an array' }
+      });
+    }
+
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
+    const Tag = await getModel(req.clinicDb, 'Tag');
+
+    const product = await ProductService.findByPk(id);
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Product not found' }
+      });
+    }
+
+    // Verify all tags exist
+    const tags = await Tag.findAll({ where: { id: tagIds } });
+    if (tags.length !== tagIds.length) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'One or more tags not found' }
+      });
+    }
+
+    // Replace all tags
+    await product.setTags(tags);
+
+    res.json({
+      success: true,
+      data: tags.map(tag => ({
+        id: tag.id,
+        name: tag.name,
+        color: tag.color
+      }))
+    });
+  } catch (error) {
+    console.error('[products] Error setting tags:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to set tags' }
+    });
+  }
+});
+
+/**
+ * DELETE /:id/tags/:tagId - Remove a tag from a product
+ */
+router.delete('/:id/tags/:tagId', async (req, res) => {
+  try {
+    const { id, tagId } = req.params;
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
+    const Tag = await getModel(req.clinicDb, 'Tag');
+
+    const product = await ProductService.findByPk(id);
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Product not found' }
+      });
+    }
+
+    const tag = await Tag.findByPk(tagId);
+    if (!tag) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Tag not found' }
+      });
+    }
+
+    await product.removeTag(tag);
+
+    res.json({
+      success: true,
+      message: 'Tag removed from product'
+    });
+  } catch (error) {
+    console.error('[products] Error removing tag:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to remove tag' }
     });
   }
 });

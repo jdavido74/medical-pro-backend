@@ -28,6 +28,10 @@ const createClinicConsentSigningRequest = require('../models/clinic/ConsentSigni
 const createClinicPractitionerWeeklyAvailability = require('../models/clinic/PractitionerWeeklyAvailability');
 const createClinicPatientCareTeam = require('../models/clinic/PatientCareTeam');
 
+// Catalog models
+const createProductService = require('../models/ProductService');
+const createTag = require('../models/Tag');
+
 // Map of clinic model names to their factory functions
 const CLINIC_MODEL_FACTORIES = {
   Patient: createClinicPatient,
@@ -41,7 +45,10 @@ const CLINIC_MODEL_FACTORIES = {
   ConsentTemplateTranslation: createClinicConsentTemplateTranslation,
   ConsentSigningRequest: createClinicConsentSigningRequest,
   PractitionerWeeklyAvailability: createClinicPractitionerWeeklyAvailability,
-  PatientCareTeam: createClinicPatientCareTeam
+  PatientCareTeam: createClinicPatientCareTeam,
+  // Catalog models
+  ProductService: createProductService,
+  Tag: createTag
 };
 
 // Cache for initialized models per database

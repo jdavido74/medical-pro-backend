@@ -20,6 +20,7 @@ const validationRoutes = require('./src/routes/validation');
 const adminRoutes = require('./src/routes/admin');
 const productRoutes = require('./src/routes/products');
 const categoryRoutes = require('./src/routes/categories');
+const tagRoutes = require('./src/routes/tags');
 
 // Medical routes
 const patientRoutes = require('./src/routes/patients');
@@ -172,6 +173,7 @@ app.use(`/api/${API_VERSION}/users`, usersRoutes);
 app.use(`/api/${API_VERSION}/audit`, auditRoutes);
 app.use(`/api/${API_VERSION}/products`, authMiddleware, clinicRoutingMiddleware, productRoutes);
 app.use(`/api/${API_VERSION}/categories`, authMiddleware, clinicRoutingMiddleware, categoryRoutes);
+app.use(`/api/${API_VERSION}/tags`, authMiddleware, clinicRoutingMiddleware, tagRoutes);
 
 // Medical API routes (all use clinic-specific databases)
 app.use(`/api/${API_VERSION}/patients`, authMiddleware, clinicRoutingMiddleware, patientRoutes);

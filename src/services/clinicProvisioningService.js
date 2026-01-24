@@ -159,6 +159,8 @@ class ClinicProvisioningService {
         'clinic_041_change_record_date_to_timestamp.sql',
         // Catalog with medical fields
         'clinic_042_create_products_services.sql',
+        // Tags system for product grouping
+        'clinic_043_add_tags_system.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];
