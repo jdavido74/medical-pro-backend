@@ -157,6 +157,8 @@ class ClinicProvisioningService {
         'clinic_040_add_medical_record_date_assistant.sql',
         // Medical records datetime (include time)
         'clinic_041_change_record_date_to_timestamp.sql',
+        // Catalog with medical fields
+        'clinic_042_create_products_services.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];
