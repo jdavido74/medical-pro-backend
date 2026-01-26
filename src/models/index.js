@@ -7,9 +7,9 @@ const Client = require('./Client');
 const Invoice = require('./Invoice');
 const Quote = require('./Quote');
 const DocumentItem = require('./DocumentItem');
-const Category = require('./Category')();
-const ProductService = require('./ProductService')();
-const ProductCategory = require('./ProductCategory')();
+const Category = require('./Category')(sequelize);
+const ProductService = require('./ProductService')(sequelize);
+const ProductCategory = require('./ProductCategory')(sequelize);
 
 // Medical models
 const Patient = require('./Patient');

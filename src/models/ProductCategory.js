@@ -1,7 +1,11 @@
 const { DataTypes } = require('sequelize');
-const { sequelize } = require('../config/database');
 
-module.exports = () => {
+/**
+ * ProductCategory model factory
+ * Junction table for ProductService ↔ Category many-to-many relationship
+ * @param {Sequelize} sequelize - Database Sequelize instance
+ */
+module.exports = (sequelize) => {
   const ProductCategory = sequelize.define('ProductCategory', {
     id: {
       type: DataTypes.UUID,

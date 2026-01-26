@@ -8,11 +8,28 @@ CREATE TABLE IF NOT EXISTS categories (
     name VARCHAR(100) NOT NULL,
     description TEXT,
     color VARCHAR(7) DEFAULT '#3B82F6',
-    company_id UUID, -- Optional, for compatibility
+    type VARCHAR(50) NOT NULL DEFAULT 'product' CHECK (type IN ('product', 'medication', 'treatment', 'service', 'appointment', 'other')),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    company_id UUID NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Add type and sort_order columns if they don't exist (for existing databases)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'categories' AND column_name = 'type') THEN
+        ALTER TABLE categories ADD COLUMN type VARCHAR(50) NOT NULL DEFAULT 'product' CHECK (type IN ('product', 'medication', 'treatment', 'service', 'appointment', 'other'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'categories' AND column_name = 'sort_order') THEN
+        ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'categories' AND column_name = 'company_id' AND is_nullable = 'YES') THEN
+        UPDATE categories SET company_id = '00000000-0000-0000-0000-000000000000' WHERE company_id IS NULL;
+        ALTER TABLE categories ALTER COLUMN company_id SET NOT NULL;
+    END IF;
+END $$;
 
 -- Create products_services table with all medical fields
 CREATE TABLE IF NOT EXISTS products_services (

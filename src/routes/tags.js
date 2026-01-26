@@ -212,18 +212,38 @@ router.put('/:id', async (req, res) => {
 });
 
 /**
- * DELETE /tags/:id - Delete a tag
+ * DELETE /tags/:id - Delete a tag (only if no products are associated)
  */
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const Tag = await getModel(req.clinicDb, 'Tag');
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
 
-    const tag = await Tag.findByPk(id);
+    const tag = await Tag.findByPk(id, {
+      include: [{
+        model: ProductService,
+        as: 'products',
+        through: { attributes: [] }
+      }]
+    });
+
     if (!tag) {
       return res.status(404).json({
         success: false,
         error: { message: 'Tag not found' }
+      });
+    }
+
+    // Check if tag has associated products
+    if (tag.products && tag.products.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Cannot delete tag with associated products',
+          code: 'TAG_HAS_PRODUCTS',
+          productCount: tag.products.length
+        }
       });
     }
 

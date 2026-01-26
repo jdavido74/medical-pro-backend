@@ -80,7 +80,7 @@ const updateSchema = Joi.object({
 
 const querySchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
-  limit: Joi.number().integer().min(1).max(100).default(50),
+  limit: Joi.number().integer().min(1).max(1000).default(100),
   search: Joi.string().optional(),
   type: Joi.string().valid('product', 'service').optional(),
   itemType: Joi.string().valid('product', 'medication', 'treatment', 'service').optional(),
@@ -168,11 +168,20 @@ const productRoutes = clinicCrudRoutes('ProductService', {
   querySchema,
   displayName: 'Catalog Item',
   searchFields: ['title', 'description', 'sku', 'provenance'],
+  // Query params that are not DB columns
+  excludeFromFilters: ['includeVariants'],
 
   // Transform data before create
   onBeforeCreate: async (data, user, clinicDb) => {
     // Transform camelCase to snake_case
     const dbData = transformToDb(data);
+
+    // Add company_id from authenticated user
+    dbData.company_id = user.companyId;
+
+    // Extract categories for later association
+    const categoryIds = data.categories || [];
+    delete dbData.categories;
 
     // Validate SKU uniqueness per clinic
     if (dbData.sku) {
@@ -192,12 +201,51 @@ const productRoutes = clinicCrudRoutes('ProductService', {
       dbData.type = 'product';
     }
 
+    // Store categoryIds for onAfterCreate
+    dbData._categoryIds = categoryIds;
+
     return dbData;
   },
 
+  // Handle category association after create
+  onAfterCreate: async (item, data, user, clinicDb) => {
+    const categoryIds = data._categoryIds || [];
+    if (categoryIds.length > 0) {
+      try {
+        const Category = await getModel(clinicDb, 'Category');
+        const categories = await Category.findAll({
+          where: { id: categoryIds }
+        });
+        if (categories.length > 0) {
+          await item.setCategories(categories);
+        }
+      } catch (error) {
+        console.error('[products] Error setting categories:', error);
+      }
+    }
+    return item;
+  },
+
   // Transform data before update
-  onBeforeUpdate: async (data, user, clinicDb, existingItem) => {
+  // Note: clinicCrudRoutes calls onBeforeUpdate(data, existingItem, user, clinicDb)
+  onBeforeUpdate: async (data, existingItem, user, clinicDb) => {
     const dbData = transformToDb(data);
+
+    // Handle category update
+    if (data.categories !== undefined) {
+      const categoryIds = data.categories || [];
+      delete dbData.categories;
+
+      try {
+        const Category = await getModel(clinicDb, 'Category');
+        const categories = await Category.findAll({
+          where: { id: categoryIds }
+        });
+        await existingItem.setCategories(categories);
+      } catch (error) {
+        console.error('[products] Error updating categories:', error);
+      }
+    }
 
     // Update type based on item_type
     if (dbData.item_type) {
@@ -205,6 +253,28 @@ const productRoutes = clinicCrudRoutes('ProductService', {
     }
 
     return dbData;
+  },
+
+  // Include categories when building query
+  buildQuery: async (query, queryParams, clinicDb) => {
+    const Category = await getModel(clinicDb, 'Category');
+    const Tag = await getModel(clinicDb, 'Tag');
+
+    query.include = query.include || [];
+    query.include.push({
+      model: Category,
+      as: 'categories',
+      through: { attributes: [] },
+      attributes: ['id', 'name', 'color', 'type']
+    });
+    query.include.push({
+      model: Tag,
+      as: 'tags',
+      through: { attributes: [] },
+      attributes: ['id', 'name', 'color']
+    });
+
+    return query;
   },
 
   // Transform response after fetch

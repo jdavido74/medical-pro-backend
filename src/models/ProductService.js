@@ -1,7 +1,11 @@
 const { DataTypes } = require('sequelize');
-const { sequelize } = require('../config/database');
 
-module.exports = () => {
+/**
+ * ProductService model factory
+ * Products, medications, treatments, and services for the catalog
+ * @param {Sequelize} sequelize - Clinic database Sequelize instance
+ */
+module.exports = (sequelize) => {
   const ProductService = sequelize.define('ProductService', {
     id: {
       type: DataTypes.UUID,
@@ -75,11 +79,9 @@ module.exports = () => {
     },
     company_id: {
       type: DataTypes.UUID,
-      allowNull: false,
-      references: {
-        model: 'companies',
-        key: 'id'
-      }
+      allowNull: false
+      // Note: No FK reference - company_id is stored for audit purposes
+      // but the companies table exists in the central DB, not clinic DBs
     },
     is_active: {
       type: DataTypes.BOOLEAN,
@@ -224,55 +226,17 @@ module.exports = () => {
         unique: true,
         where: {
           sku: {
-            [sequelize.Sequelize.Op.ne]: null
+            [require('sequelize').Op.ne]: null
           }
         }
       }
     ]
   });
 
-  ProductService.associate = (models) => {
-    ProductService.belongsTo(models.Company, {
-      foreignKey: 'company_id',
-      as: 'company'
-    });
-
-    ProductService.belongsToMany(models.Category, {
-      through: 'product_categories',
-      foreignKey: 'product_service_id',
-      otherKey: 'category_id',
-      as: 'categories'
-    });
-
-    ProductService.hasMany(models.InvoiceItem, {
-      foreignKey: 'product_service_id',
-      as: 'invoice_items'
-    });
-
-    ProductService.hasMany(models.QuoteItem, {
-      foreignKey: 'product_service_id',
-      as: 'quote_items'
-    });
-
-    // Self-reference for family/variant relationship (legacy, kept for compatibility)
-    ProductService.belongsTo(ProductService, {
-      foreignKey: 'parent_id',
-      as: 'parent'
-    });
-
-    ProductService.hasMany(ProductService, {
-      foreignKey: 'parent_id',
-      as: 'variants'
-    });
-
-    // Tags association (new flexible grouping system)
-    ProductService.belongsToMany(models.Tag, {
-      through: 'product_tags',
-      foreignKey: 'product_service_id',
-      otherKey: 'tag_id',
-      as: 'tags'
-    });
-  };
+  // Associations are handled by ModelFactory.setupAssociations()
+  // ProductService ↔ Category (many-to-many through product_categories)
+  // ProductService ↔ Tag (many-to-many through product_tags)
+  // ProductService → ProductService (self-reference for family/variants)
 
   return ProductService;
 };

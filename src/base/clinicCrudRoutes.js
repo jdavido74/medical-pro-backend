@@ -76,7 +76,16 @@ function createClinicCrudRoutes(modelName, config = {}) {
     includeRelations = null,
     // Default sort order for list queries
     // Example: [['appointment_date', 'DESC'], ['start_time', 'DESC']]
-    defaultOrder = [['created_at', 'DESC']]
+    defaultOrder = [['created_at', 'DESC']],
+    // Query params to exclude from filters (not DB columns)
+    // Example: ['includeVariants', 'includeInactive']
+    excludeFromFilters = [],
+    // Custom query builder (function that receives query, queryParams, clinicDb)
+    // Example: buildQuery: async (query, params, clinicDb) => { query.include = [...]; return query; }
+    buildQuery = null,
+    // Transform response before sending to client (snake_case to camelCase)
+    // Example: transformResponse: (item) => ({ id: item.id, isActive: item.is_active, ... })
+    transformResponse = null
   } = config;
 
   /**
@@ -117,9 +126,13 @@ function createClinicCrudRoutes(modelName, config = {}) {
       // Get clinic-specific model
       const Model = await getModel(req.clinicDb, modelName);
 
+      // Remove excluded params from filters (they're not DB columns)
+      const dbFilters = { ...filters };
+      excludeFromFilters.forEach(key => delete dbFilters[key]);
+
       // Build where clause - NO company_id needed (DB is already isolated!)
       // Note: Clinic models have different soft delete mechanisms (archived, or none)
-      const where = { ...filters };
+      const where = { ...dbFilters };
 
       // Filter archived records if model has archived field
       if (Model.rawAttributes.archived) {
@@ -157,11 +170,23 @@ function createClinicCrudRoutes(modelName, config = {}) {
         }
       }
 
+      // Custom query builder hook
+      if (buildQuery) {
+        try {
+          await buildQuery(queryOptions, params, req.clinicDb);
+        } catch (buildErr) {
+          logger.warn(`Could not build custom query for ${modelName}:`, buildErr.message);
+        }
+      }
+
       const { count, rows } = await Model.findAndCountAll(queryOptions);
+
+      // Transform response if transformer provided
+      const data = transformResponse ? rows.map(transformResponse) : rows;
 
       res.json({
         success: true,
-        data: rows,
+        data,
         pagination: {
           page,
           limit,
@@ -209,7 +234,7 @@ function createClinicCrudRoutes(modelName, config = {}) {
 
       res.json({
         success: true,
-        data: item
+        data: transformResponse ? transformResponse(item) : item
       });
     } catch (error) {
       next(error);
@@ -276,7 +301,7 @@ function createClinicCrudRoutes(modelName, config = {}) {
 
       res.status(201).json({
         success: true,
-        data: item,
+        data: transformResponse ? transformResponse(item) : item,
         message: `${displayName} created successfully`
       });
     } catch (error) {
@@ -354,7 +379,7 @@ function createClinicCrudRoutes(modelName, config = {}) {
 
       res.json({
         success: true,
-        data: item,
+        data: transformResponse ? transformResponse(item) : item,
         message: `${displayName} updated successfully`
       });
     } catch (error) {
@@ -368,6 +393,8 @@ function createClinicCrudRoutes(modelName, config = {}) {
    */
   router.delete('/:id', async (req, res, next) => {
     try {
+      logger.info(`[${modelName}] DELETE request`, { id: req.params.id, path: req.path });
+
       // Check delete permission
       if (permissions.delete && !(await checkPermission(req, permissions.delete))) {
         return res.status(403).json({
@@ -386,6 +413,7 @@ function createClinicCrudRoutes(modelName, config = {}) {
       const item = await Model.findByPk(req.params.id);
 
       if (!item) {
+        logger.warn(`[${modelName}] DELETE - Item not found`, { id: req.params.id });
         return res.status(404).json({
           success: false,
           error: {
@@ -417,7 +445,10 @@ function createClinicCrudRoutes(modelName, config = {}) {
         userId: req.user.id
       });
 
-      res.status(204).send();
+      res.json({
+        success: true,
+        message: `${displayName} deleted successfully`
+      });
     } catch (error) {
       next(error);
     }

@@ -31,6 +31,7 @@ const createClinicPatientCareTeam = require('../models/clinic/PatientCareTeam');
 // Catalog models
 const createProductService = require('../models/ProductService');
 const createTag = require('../models/Tag');
+const createCategory = require('../models/Category');
 
 // Map of clinic model names to their factory functions
 const CLINIC_MODEL_FACTORIES = {
@@ -48,7 +49,8 @@ const CLINIC_MODEL_FACTORIES = {
   PatientCareTeam: createClinicPatientCareTeam,
   // Catalog models
   ProductService: createProductService,
-  Tag: createTag
+  Tag: createTag,
+  Category: createCategory
 };
 
 // Cache for initialized models per database
@@ -139,7 +141,112 @@ async function setupAssociations(clinicDb, modelName, model, dbModels) {
         }
         break;
 
-      // Add more associations as needed
+      case 'ProductService':
+        // ProductService has many Tags (many-to-many)
+        if (!dbModels.Tag) {
+          const Tag = CLINIC_MODEL_FACTORIES.Tag(clinicDb);
+          dbModels.Tag = Tag;
+        }
+        // Define junction model for product_tags
+        if (!dbModels.ProductTag) {
+          dbModels.ProductTag = clinicDb.define('ProductTag', {}, {
+            tableName: 'product_tags',
+            timestamps: false
+          });
+        }
+        if (!model.associations?.tags) {
+          model.belongsToMany(dbModels.Tag, {
+            through: dbModels.ProductTag,
+            foreignKey: 'product_service_id',
+            otherKey: 'tag_id',
+            as: 'tags'
+          });
+          // Set up reverse association on Tag
+          if (!dbModels.Tag.associations?.products) {
+            dbModels.Tag.belongsToMany(model, {
+              through: dbModels.ProductTag,
+              foreignKey: 'tag_id',
+              otherKey: 'product_service_id',
+              as: 'products'
+            });
+          }
+        }
+        // ProductService has many Categories (many-to-many)
+        if (!dbModels.Category) {
+          const Category = CLINIC_MODEL_FACTORIES.Category(clinicDb);
+          dbModels.Category = Category;
+        }
+        // Define junction model for product_categories
+        if (!dbModels.ProductCategory) {
+          dbModels.ProductCategory = clinicDb.define('ProductCategory', {}, {
+            tableName: 'product_categories',
+            timestamps: false
+          });
+        }
+        if (!model.associations?.categories) {
+          model.belongsToMany(dbModels.Category, {
+            through: dbModels.ProductCategory,
+            foreignKey: 'product_service_id',
+            otherKey: 'category_id',
+            as: 'categories'
+          });
+          // Set up reverse association on Category
+          if (!dbModels.Category.associations?.products) {
+            dbModels.Category.belongsToMany(model, {
+              through: dbModels.ProductCategory,
+              foreignKey: 'category_id',
+              otherKey: 'product_service_id',
+              as: 'products'
+            });
+          }
+        }
+        break;
+
+      case 'Tag':
+        // Tag has many ProductServices (many-to-many)
+        if (!dbModels.ProductService) {
+          const ProductService = CLINIC_MODEL_FACTORIES.ProductService(clinicDb);
+          dbModels.ProductService = ProductService;
+        }
+        // Ensure junction model exists
+        if (!dbModels.ProductTag) {
+          dbModels.ProductTag = clinicDb.define('ProductTag', {}, {
+            tableName: 'product_tags',
+            timestamps: false
+          });
+        }
+        if (!model.associations?.products) {
+          model.belongsToMany(dbModels.ProductService, {
+            through: dbModels.ProductTag,
+            foreignKey: 'tag_id',
+            otherKey: 'product_service_id',
+            as: 'products'
+          });
+        }
+        break;
+
+      case 'Category':
+        // Category has many ProductServices (many-to-many)
+        if (!dbModels.ProductService) {
+          const ProductService = CLINIC_MODEL_FACTORIES.ProductService(clinicDb);
+          dbModels.ProductService = ProductService;
+        }
+        // Ensure junction model exists
+        if (!dbModels.ProductCategory) {
+          dbModels.ProductCategory = clinicDb.define('ProductCategory', {}, {
+            tableName: 'product_categories',
+            timestamps: false
+          });
+        }
+        if (!model.associations?.products) {
+          model.belongsToMany(dbModels.ProductService, {
+            through: dbModels.ProductCategory,
+            foreignKey: 'category_id',
+            otherKey: 'product_service_id',
+            as: 'products'
+          });
+        }
+        break;
     }
   } catch (err) {
     console.warn(`[ModelFactory] Could not set up associations for ${modelName}:`, err.message);
