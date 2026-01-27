@@ -249,6 +249,45 @@ function createAppointmentModel(clinicDb) {
     link_sequence: {
       type: DataTypes.INTEGER,
       allowNull: true
+    },
+
+    // Workflow fields
+    quote_id: {
+      type: DataTypes.UUID,
+      allowNull: true
+    },
+    invoice_id: {
+      type: DataTypes.UUID,
+      allowNull: true
+    },
+    created_by_provider_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'healthcare_providers',
+        key: 'id'
+      },
+      onDelete: 'SET NULL'
+    },
+
+    // Confirmation token for patient self-confirmation
+    confirmation_token: {
+      type: DataTypes.UUID,
+      allowNull: true
+    },
+    confirmation_token_expires_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+
+    // Consent status tracking
+    consent_status: {
+      type: DataTypes.STRING(30),
+      allowNull: true,
+      defaultValue: 'pending',
+      validate: {
+        isIn: [['pending', 'partial', 'sent', 'signed', 'not_required', 'missing_association']]
+      }
     }
   }, {
     tableName: 'appointments',
@@ -265,7 +304,12 @@ function createAppointmentModel(clinicDb) {
       // Index for machine + date (treatment appointments)
       { fields: ['machine_id', 'appointment_date'] },
       // Index for linked appointments (multi-treatment sessions)
-      { fields: ['linked_appointment_id'] }
+      { fields: ['linked_appointment_id'] },
+      // Workflow indexes
+      { fields: ['quote_id'] },
+      { fields: ['invoice_id'] },
+      { fields: ['consent_status'] },
+      { fields: ['confirmation_token'], unique: true }
     ],
     hooks: {
       beforeValidate: (appointment, opts) => {
@@ -328,6 +372,53 @@ function createAppointmentModel(clinicDb) {
 
   Appointment.prototype.markNoShow = async function() {
     this.status = 'no_show';
+    return await this.save();
+  };
+
+  /**
+   * Generate a confirmation token for patient self-confirmation
+   * Token expires in 72 hours by default
+   */
+  Appointment.prototype.generateConfirmationToken = async function(expiresInHours = 72) {
+    const { v4: uuidv4 } = require('uuid');
+    this.confirmation_token = uuidv4();
+    this.confirmation_token_expires_at = new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
+    return await this.save();
+  };
+
+  /**
+   * Validate confirmation token
+   */
+  Appointment.prototype.isValidConfirmationToken = function(token) {
+    if (!this.confirmation_token || this.confirmation_token !== token) {
+      return false;
+    }
+    if (this.confirmation_token_expires_at && new Date() > new Date(this.confirmation_token_expires_at)) {
+      return false;
+    }
+    return true;
+  };
+
+  /**
+   * Confirm appointment via token (patient self-confirmation)
+   */
+  Appointment.prototype.confirmViaToken = async function(token) {
+    if (!this.isValidConfirmationToken(token)) {
+      throw new Error('Invalid or expired confirmation token');
+    }
+    this.status = 'confirmed';
+    this.confirmed_at = new Date();
+    this.confirmed_by = 'patient';
+    this.confirmation_token = null;
+    this.confirmation_token_expires_at = null;
+    return await this.save();
+  };
+
+  /**
+   * Update consent status
+   */
+  Appointment.prototype.updateConsentStatus = async function(status) {
+    this.consent_status = status;
     return await this.save();
   };
 
@@ -556,6 +647,35 @@ function createAppointmentModel(clinicDb) {
     if (!appointment) return false;
 
     return !!(appointment.linked_appointment_id || appointment.link_sequence === 1);
+  };
+
+  /**
+   * Find appointment by confirmation token
+   */
+  Appointment.findByConfirmationToken = async function(token, options = {}) {
+    return await this.findOne({
+      where: {
+        confirmation_token: token,
+        ...options.where
+      },
+      ...options
+    });
+  };
+
+  /**
+   * Find appointments pending consent
+   */
+  Appointment.findPendingConsent = async function(options = {}) {
+    const { Op } = require('sequelize');
+    return await this.findAll({
+      where: {
+        consent_status: { [Op.in]: ['pending', 'sent', 'partial'] },
+        status: { [Op.in]: ['scheduled', 'confirmed'] },
+        ...options.where
+      },
+      order: [['appointment_date', 'ASC'], ['start_time', 'ASC']],
+      ...options
+    });
   };
 
   return Appointment;

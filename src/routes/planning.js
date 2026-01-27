@@ -9,7 +9,8 @@ const Joi = require('joi');
 const { Op } = require('sequelize');
 const { getModel } = require('../base/ModelFactory');
 const planningService = require('../services/planningService');
-const { checkPermission } = require('../middleware/permissions');
+const stateMachineService = require('../services/appointmentStateMachineService');
+const { requirePermission } = require('../middleware/permissions');
 const { buildCategoryInheritanceMap, getEffectiveCategories } = require('../utils/categoryInheritance');
 
 // Validation schemas
@@ -153,6 +154,11 @@ const transformAppointment = (apt) => {
       title: data.service.title,
       duration: data.service.duration
     } : undefined,
+    // Workflow fields
+    consentStatus: data.consent_status,
+    quoteId: data.quote_id,
+    invoiceId: data.invoice_id,
+    confirmationToken: data.confirmation_token ? true : false, // Don't expose token, just indicate if exists
     // Metadata
     createdAt: data.created_at,
     updatedAt: data.updated_at
@@ -393,10 +399,24 @@ router.post('/appointments', async (req, res) => {
       ]
     });
 
+    // Schedule timed actions for the new appointment (e.g., confirmation email 24h before)
+    let scheduledActions = { actions: [], jobs: [] };
+    try {
+      scheduledActions = await stateMachineService.scheduleTimedActions(
+        req.clinicDb,
+        appointment,
+        req.user?.id
+      );
+    } catch (scheduleError) {
+      console.warn('[planning] Warning: Could not schedule timed actions:', scheduleError.message);
+      // Don't fail the request if action scheduling fails
+    }
+
     res.status(201).json({
       success: true,
       data: transformAppointment(appointment),
-      message: 'Appointment created successfully'
+      message: 'Appointment created successfully',
+      scheduledActions: scheduledActions.actions?.length || 0
     });
   } catch (error) {
     console.error('[planning] Error creating appointment:', error);

@@ -27,6 +27,9 @@ const createClinicConsentTemplateTranslation = require('../models/clinic/Consent
 const createClinicConsentSigningRequest = require('../models/clinic/ConsentSigningRequest');
 const createClinicPractitionerWeeklyAvailability = require('../models/clinic/PractitionerWeeklyAvailability');
 const createClinicPatientCareTeam = require('../models/clinic/PatientCareTeam');
+const createClinicAppointmentAction = require('../models/clinic/AppointmentAction');
+const createClinicScheduledJob = require('../models/clinic/ScheduledJob');
+const createClinicTreatmentConsentTemplate = require('../models/clinic/TreatmentConsentTemplate');
 
 // Catalog models
 const createProductService = require('../models/ProductService');
@@ -54,6 +57,10 @@ const CLINIC_MODEL_FACTORIES = {
   ConsentSigningRequest: createClinicConsentSigningRequest,
   PractitionerWeeklyAvailability: createClinicPractitionerWeeklyAvailability,
   PatientCareTeam: createClinicPatientCareTeam,
+  // Appointment workflow models
+  AppointmentAction: createClinicAppointmentAction,
+  ScheduledJob: createClinicScheduledJob,
+  TreatmentConsentTemplate: createClinicTreatmentConsentTemplate,
   // Catalog models
   ProductService: createProductService,
   Tag: createTag,
@@ -418,6 +425,41 @@ async function setupAssociations(clinicDb, modelName, model, dbModels) {
           model.belongsTo(dbModels.Supplier, {
             foreignKey: 'supplier_id',
             as: 'supplier'
+          });
+        }
+        break;
+
+      case 'AppointmentAction':
+        // AppointmentAction belongs to Appointment
+        if (!dbModels.Appointment) {
+          const Appointment = CLINIC_MODEL_FACTORIES.Appointment(clinicDb);
+          dbModels.Appointment = Appointment;
+        }
+        if (!model.associations?.appointment) {
+          model.belongsTo(dbModels.Appointment, {
+            foreignKey: 'appointment_id',
+            as: 'appointment'
+          });
+        }
+        // Also set up reverse association on Appointment
+        if (!dbModels.Appointment.associations?.actions) {
+          dbModels.Appointment.hasMany(model, {
+            foreignKey: 'appointment_id',
+            as: 'actions'
+          });
+        }
+        break;
+
+      case 'TreatmentConsentTemplate':
+        // TreatmentConsentTemplate belongs to ConsentTemplate
+        if (!dbModels.ConsentTemplate) {
+          const ConsentTemplate = CLINIC_MODEL_FACTORIES.ConsentTemplate(clinicDb);
+          dbModels.ConsentTemplate = ConsentTemplate;
+        }
+        if (!model.associations?.consentTemplate) {
+          model.belongsTo(dbModels.ConsentTemplate, {
+            foreignKey: 'consent_template_id',
+            as: 'consentTemplate'
           });
         }
         break;

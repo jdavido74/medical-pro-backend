@@ -50,6 +50,9 @@ const patientCareTeamRoutes = require('./src/routes/patientCareTeam');
 const teamsRoutes = require('./src/routes/teams');
 const machineRoutes = require('./src/routes/machines');
 const planningRoutes = require('./src/routes/planning');
+const appointmentActionsRoutes = require('./src/routes/appointment-actions');
+const treatmentConsentsRoutes = require('./src/routes/treatment-consents');
+const publicAppointmentRoutes = require('./src/routes/public-appointment');
 
 // User management routes (central database)
 const usersRoutes = require('./src/routes/users');
@@ -158,6 +161,8 @@ app.get('/health', (req, res) => {
 // Public routes (no authentication required)
 // Consent signing page for patients (accessed via email link)
 app.use(`/api/${API_VERSION}/public/sign`, publicConsentSigningRoutes);
+// Public appointment confirmation (accessed via email link)
+app.use(`/api/${API_VERSION}/public`, clinicRoutingMiddleware, publicAppointmentRoutes);
 
 // API routes
 app.use(`/api/${API_VERSION}/auth`, authRoutes);
@@ -203,6 +208,10 @@ app.use(`/api/${API_VERSION}/care-team`, authMiddleware, clinicRoutingMiddleware
 app.use(`/api/${API_VERSION}/teams`, teamsRoutes);
 app.use(`/api/${API_VERSION}/machines`, authMiddleware, clinicRoutingMiddleware, machineRoutes);
 app.use(`/api/${API_VERSION}/planning`, authMiddleware, clinicRoutingMiddleware, planningRoutes);
+// Appointment actions (state machine) routes - mounted under /planning for consistency
+app.use(`/api/${API_VERSION}/planning`, authMiddleware, clinicRoutingMiddleware, appointmentActionsRoutes);
+// Treatment consent associations
+app.use(`/api/${API_VERSION}/treatment-consents`, authMiddleware, clinicRoutingMiddleware, treatmentConsentsRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

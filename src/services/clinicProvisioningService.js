@@ -161,6 +161,18 @@ class ClinicProvisioningService {
         'clinic_042_create_products_services.sql',
         // Tags system for product grouping
         'clinic_043_add_tags_system.sql',
+        // Machines for treatments
+        'clinic_043_create_machines.sql',
+        // Planning system
+        'clinic_044_appointments_planning.sql',
+        'clinic_045_linked_appointments.sql',
+        // Suppliers
+        'clinic_046_suppliers.sql',
+        // Appointment workflow automation
+        'clinic_047_appointment_actions.sql',
+        'clinic_048_scheduled_jobs.sql',
+        'clinic_049_treatment_consent_templates.sql',
+        'clinic_050_appointment_workflow_fields.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];
