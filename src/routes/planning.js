@@ -10,6 +10,7 @@ const { Op } = require('sequelize');
 const { getModel } = require('../base/ModelFactory');
 const planningService = require('../services/planningService');
 const { checkPermission } = require('../middleware/permissions');
+const { buildCategoryInheritanceMap, getEffectiveCategories } = require('../utils/categoryInheritance');
 
 // Validation schemas
 const createAppointmentSchema = Joi.object({
@@ -656,12 +657,16 @@ router.get('/treatments', async (req, res) => {
       order: [['title', 'ASC']]
     });
 
-    // Filter by category if specified
+    // Build category inheritance map for variants without own categories
+    const parentCategoriesMap = await buildCategoryInheritanceMap(treatments, getModel, req.clinicDb);
+
+    // Filter by category if specified (including inherited categories)
     let filteredTreatments = treatments;
     if (categoryId) {
-      filteredTreatments = treatments.filter(t =>
-        t.categories?.some(c => c.id === categoryId)
-      );
+      filteredTreatments = treatments.filter(t => {
+        const effectiveCats = getEffectiveCategories(t, parentCategoriesMap);
+        return effectiveCats.some(c => c.id === categoryId);
+      });
     }
 
     // Group by category for better UX
@@ -669,6 +674,7 @@ router.get('/treatments', async (req, res) => {
     const uncategorized = [];
 
     filteredTreatments.forEach(t => {
+      const effectiveCategories = getEffectiveCategories(t, parentCategoriesMap);
       const treatment = {
         id: t.id,
         title: t.title,
@@ -681,11 +687,11 @@ router.get('/treatments', async (req, res) => {
         dosage: t.dosage,
         dosageUnit: t.dosage_unit,
         volume: t.volume,
-        categories: t.categories?.map(c => ({ id: c.id, name: c.name, color: c.color })) || []
+        categories: effectiveCategories.map(c => ({ id: c.id, name: c.name, color: c.color }))
       };
 
-      if (t.categories && t.categories.length > 0) {
-        t.categories.forEach(cat => {
+      if (effectiveCategories.length > 0) {
+        effectiveCategories.forEach(cat => {
           if (!byCategory[cat.id]) {
             byCategory[cat.id] = {
               id: cat.id,
@@ -723,19 +729,22 @@ router.get('/treatments', async (req, res) => {
     res.json({
       success: true,
       data: {
-        treatments: filteredTreatments.map(t => ({
-          id: t.id,
-          title: t.title,
-          description: t.description,
-          duration: t.duration,
-          price: parseFloat(t.unit_price) || 0,
-          requiresMachine: !t.is_overlappable,
-          isVariant: t.is_variant,
-          dosage: t.dosage,
-          dosageUnit: t.dosage_unit,
-          volume: t.volume,
-          categories: t.categories?.map(c => ({ id: c.id, name: c.name, color: c.color })) || []
-        })),
+        treatments: filteredTreatments.map(t => {
+          const effectiveCategories = getEffectiveCategories(t, parentCategoriesMap);
+          return {
+            id: t.id,
+            title: t.title,
+            description: t.description,
+            duration: t.duration,
+            price: parseFloat(t.unit_price) || 0,
+            requiresMachine: !t.is_overlappable,
+            isVariant: t.is_variant,
+            dosage: t.dosage,
+            dosageUnit: t.dosage_unit,
+            volume: t.volume,
+            categories: effectiveCategories.map(c => ({ id: c.id, name: c.name, color: c.color }))
+          };
+        }),
         byCategory: categoriesWithTreatments,
         total: filteredTreatments.length
       }
