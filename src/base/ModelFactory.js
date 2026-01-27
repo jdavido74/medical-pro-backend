@@ -33,6 +33,13 @@ const createProductService = require('../models/ProductService');
 const createTag = require('../models/Tag');
 const createCategory = require('../models/Category');
 
+// Machine models
+const createMachine = require('../models/Machine');
+
+// Supplier models
+const createSupplier = require('../models/Supplier');
+const createProductSupplier = require('../models/ProductSupplier');
+
 // Map of clinic model names to their factory functions
 const CLINIC_MODEL_FACTORIES = {
   Patient: createClinicPatient,
@@ -50,7 +57,12 @@ const CLINIC_MODEL_FACTORIES = {
   // Catalog models
   ProductService: createProductService,
   Tag: createTag,
-  Category: createCategory
+  Category: createCategory,
+  // Machine models
+  Machine: createMachine,
+  // Supplier models
+  Supplier: createSupplier,
+  ProductSupplier: createProductSupplier
 };
 
 // Cache for initialized models per database
@@ -86,6 +98,9 @@ async function getModel(clinicDb, modelName) {
 
   // Check if model is already initialized for this database
   if (dbModels[modelName]) {
+    // Model exists, but re-run associations to ensure they're set up
+    // (in case related models were loaded later)
+    await setupAssociations(clinicDb, modelName, dbModels[modelName], dbModels);
     return dbModels[modelName];
   }
 
@@ -123,6 +138,50 @@ async function setupAssociations(clinicDb, modelName, model, dbModels) {
           model.belongsTo(dbModels.Patient, {
             foreignKey: 'patient_id',
             as: 'patient'
+          });
+        }
+
+        // Appointment belongs to Machine (for treatments)
+        if (!dbModels.Machine) {
+          const Machine = CLINIC_MODEL_FACTORIES.Machine(clinicDb);
+          dbModels.Machine = Machine;
+        }
+        if (!model.associations?.machine) {
+          model.belongsTo(dbModels.Machine, {
+            foreignKey: 'machine_id',
+            as: 'machine'
+          });
+        }
+
+        // Appointment belongs to HealthcareProvider (provider)
+        if (!dbModels.HealthcareProvider) {
+          const HealthcareProvider = CLINIC_MODEL_FACTORIES.HealthcareProvider(clinicDb);
+          dbModels.HealthcareProvider = HealthcareProvider;
+        }
+        if (!model.associations?.provider) {
+          model.belongsTo(dbModels.HealthcareProvider, {
+            foreignKey: 'provider_id',
+            as: 'provider'
+          });
+        }
+
+        // Appointment belongs to HealthcareProvider (assistant)
+        if (!model.associations?.assistant) {
+          model.belongsTo(dbModels.HealthcareProvider, {
+            foreignKey: 'assistant_id',
+            as: 'assistant'
+          });
+        }
+
+        // Appointment belongs to ProductService (service/treatment)
+        if (!dbModels.ProductService) {
+          const ProductService = CLINIC_MODEL_FACTORIES.ProductService(clinicDb);
+          dbModels.ProductService = ProductService;
+        }
+        if (!model.associations?.service) {
+          model.belongsTo(dbModels.ProductService, {
+            foreignKey: 'service_id',
+            as: 'service'
           });
         }
         break;
@@ -200,6 +259,35 @@ async function setupAssociations(clinicDb, modelName, model, dbModels) {
             });
           }
         }
+        // ProductService (treatments) has many Machines (many-to-many)
+        if (!dbModels.Machine) {
+          const Machine = CLINIC_MODEL_FACTORIES.Machine(clinicDb);
+          dbModels.Machine = Machine;
+        }
+        // Define junction model for machine_treatments
+        if (!dbModels.MachineTreatment) {
+          dbModels.MachineTreatment = clinicDb.define('MachineTreatment', {}, {
+            tableName: 'machine_treatments',
+            timestamps: false
+          });
+        }
+        if (!model.associations?.machines) {
+          model.belongsToMany(dbModels.Machine, {
+            through: dbModels.MachineTreatment,
+            foreignKey: 'treatment_id',
+            otherKey: 'machine_id',
+            as: 'machines'
+          });
+          // Set up reverse association on Machine
+          if (!dbModels.Machine.associations?.treatments) {
+            dbModels.Machine.belongsToMany(model, {
+              through: dbModels.MachineTreatment,
+              foreignKey: 'machine_id',
+              otherKey: 'treatment_id',
+              as: 'treatments'
+            });
+          }
+        }
         break;
 
       case 'Tag':
@@ -244,6 +332,92 @@ async function setupAssociations(clinicDb, modelName, model, dbModels) {
             foreignKey: 'category_id',
             otherKey: 'product_service_id',
             as: 'products'
+          });
+        }
+        break;
+
+      case 'Machine':
+        // Machine has many Treatments (many-to-many through machine_treatments)
+        if (!dbModels.ProductService) {
+          const ProductService = CLINIC_MODEL_FACTORIES.ProductService(clinicDb);
+          dbModels.ProductService = ProductService;
+        }
+        // Define junction model for machine_treatments
+        if (!dbModels.MachineTreatment) {
+          dbModels.MachineTreatment = clinicDb.define('MachineTreatment', {}, {
+            tableName: 'machine_treatments',
+            timestamps: false
+          });
+        }
+        if (!model.associations?.treatments) {
+          model.belongsToMany(dbModels.ProductService, {
+            through: dbModels.MachineTreatment,
+            foreignKey: 'machine_id',
+            otherKey: 'treatment_id',
+            as: 'treatments'
+          });
+          // Set up reverse association on ProductService
+          if (!dbModels.ProductService.associations?.machines) {
+            dbModels.ProductService.belongsToMany(model, {
+              through: dbModels.MachineTreatment,
+              foreignKey: 'treatment_id',
+              otherKey: 'machine_id',
+              as: 'machines'
+            });
+          }
+        }
+        break;
+
+      case 'Supplier':
+        // Supplier has many ProductServices (many-to-many through product_suppliers)
+        if (!dbModels.ProductService) {
+          const ProductService = CLINIC_MODEL_FACTORIES.ProductService(clinicDb);
+          dbModels.ProductService = ProductService;
+        }
+        // Ensure ProductSupplier junction model exists
+        if (!dbModels.ProductSupplier) {
+          const ProductSupplier = CLINIC_MODEL_FACTORIES.ProductSupplier(clinicDb);
+          dbModels.ProductSupplier = ProductSupplier;
+        }
+        if (!model.associations?.products) {
+          model.belongsToMany(dbModels.ProductService, {
+            through: dbModels.ProductSupplier,
+            foreignKey: 'supplier_id',
+            otherKey: 'product_id',
+            as: 'products'
+          });
+          // Set up reverse association on ProductService
+          if (!dbModels.ProductService.associations?.suppliers) {
+            dbModels.ProductService.belongsToMany(model, {
+              through: dbModels.ProductSupplier,
+              foreignKey: 'product_id',
+              otherKey: 'supplier_id',
+              as: 'suppliers'
+            });
+          }
+        }
+        break;
+
+      case 'ProductSupplier':
+        // ProductSupplier belongs to ProductService and Supplier
+        if (!dbModels.ProductService) {
+          const ProductService = CLINIC_MODEL_FACTORIES.ProductService(clinicDb);
+          dbModels.ProductService = ProductService;
+        }
+        if (!dbModels.Supplier) {
+          const Supplier = CLINIC_MODEL_FACTORIES.Supplier(clinicDb);
+          dbModels.Supplier = Supplier;
+        }
+        if (!model.associations?.product) {
+          model.belongsTo(dbModels.ProductService, {
+            foreignKey: 'product_id',
+            as: 'product'
+          });
+        }
+        if (!model.associations?.supplier) {
+          model.belongsTo(dbModels.Supplier, {
+            foreignKey: 'supplier_id',
+            as: 'supplier'
           });
         }
         break;

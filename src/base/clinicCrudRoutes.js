@@ -290,7 +290,7 @@ function createClinicCrudRoutes(modelName, config = {}) {
 
       // Hook after create
       if (onAfterCreate) {
-        await onAfterCreate(item, req.user, req.clinicDb);
+        await onAfterCreate(item, validatedData, req.user, req.clinicDb);
       }
 
       logger.info(`${modelName} created`, {

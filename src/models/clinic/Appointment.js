@@ -45,12 +45,61 @@ function createAppointmentModel(clinicDb) {
     // Provider relationship (NOT practitioner_id!)
     provider_id: {
       type: DataTypes.UUID,
-      allowNull: false,
+      allowNull: true, // Now nullable for treatment appointments
       references: {
         model: 'healthcare_providers', // NOT practitioners!
         key: 'id'
       },
       onDelete: 'CASCADE'
+    },
+
+    // Category: treatment (machine-based) or consultation (practitioner-based)
+    category: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'consultation',
+      validate: {
+        isIn: [['treatment', 'consultation']]
+      }
+    },
+
+    // Machine for treatment appointments
+    machine_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'machines',
+        key: 'id'
+      },
+      onDelete: 'SET NULL'
+    },
+
+    // Assistant/operator (informational)
+    assistant_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'healthcare_providers',
+        key: 'id'
+      },
+      onDelete: 'SET NULL'
+    },
+
+    // Link to catalog service/treatment
+    service_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'products_services',
+        key: 'id'
+      },
+      onDelete: 'SET NULL'
+    },
+
+    // Color override for calendar
+    color: {
+      type: DataTypes.STRING(7),
+      allowNull: true
     },
 
     // Appointment identification
@@ -185,6 +234,21 @@ function createAppointmentModel(clinicDb) {
       type: DataTypes.BOOLEAN,
       allowNull: true,
       defaultValue: true
+    },
+
+    // Linked appointments (for multi-treatment sessions)
+    linked_appointment_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'appointments',
+        key: 'id'
+      },
+      onDelete: 'SET NULL'
+    },
+    link_sequence: {
+      type: DataTypes.INTEGER,
+      allowNull: true
     }
   }, {
     tableName: 'appointments',
@@ -194,13 +258,14 @@ function createAppointmentModel(clinicDb) {
       { fields: ['provider_id', 'appointment_date'] },
       { fields: ['start_time'] },
       { fields: ['status'] },
+      { fields: ['category'] },
+      { fields: ['machine_id'] },
+      { fields: ['service_id'] },
       { fields: ['appointment_number'], unique: true },
-      // Unique constraint: provider + date + time
-      {
-        fields: ['provider_id', 'appointment_date', 'start_time'],
-        unique: true,
-        name: 'appointments_provider_id_appointment_date_start_time_key'
-      }
+      // Index for machine + date (treatment appointments)
+      { fields: ['machine_id', 'appointment_date'] },
+      // Index for linked appointments (multi-treatment sessions)
+      { fields: ['linked_appointment_id'] }
     ],
     hooks: {
       beforeValidate: (appointment, opts) => {
@@ -348,6 +413,58 @@ function createAppointmentModel(clinicDb) {
   };
 
   /**
+   * Check for machine time conflicts (for treatment appointments)
+   */
+  Appointment.checkMachineConflict = async function(machineId, date, startTime, endTime, excludeId = null) {
+    const { Op } = require('sequelize');
+
+    const where = {
+      machine_id: machineId,
+      appointment_date: date,
+      status: { [Op.ne]: 'cancelled' },
+      [Op.or]: [
+        // New appointment starts during existing appointment
+        {
+          start_time: { [Op.lte]: startTime },
+          end_time: { [Op.gt]: startTime }
+        },
+        // New appointment ends during existing appointment
+        {
+          start_time: { [Op.lt]: endTime },
+          end_time: { [Op.gte]: endTime }
+        },
+        // New appointment completely contains existing appointment
+        {
+          start_time: { [Op.gte]: startTime },
+          end_time: { [Op.lte]: endTime }
+        }
+      ]
+    };
+
+    if (excludeId) {
+      where.id = { [Op.ne]: excludeId };
+    }
+
+    const conflict = await this.findOne({ where });
+    return conflict !== null;
+  };
+
+  /**
+   * Find appointments by machine and date
+   */
+  Appointment.findByMachineAndDate = async function(machineId, date, options = {}) {
+    return await this.findAll({
+      where: {
+        machine_id: machineId,
+        appointment_date: date,
+        ...options.where
+      },
+      order: [['start_time', 'ASC']],
+      ...options
+    });
+  };
+
+  /**
    * Find upcoming appointments
    */
   Appointment.findUpcoming = async function(options = {}) {
@@ -363,6 +480,82 @@ function createAppointmentModel(clinicDb) {
       order: [['appointment_date', 'ASC'], ['start_time', 'ASC']],
       ...options
     });
+  };
+
+  /**
+   * Find all appointments in a linked group
+   * @param {string} appointmentId - ID of any appointment in the group
+   * @returns {Array} All appointments in the group, ordered by link_sequence
+   */
+  Appointment.findLinkedGroup = async function(appointmentId, options = {}) {
+    // First, find the appointment to get its linked_appointment_id
+    const appointment = await this.findByPk(appointmentId);
+    if (!appointment) return [];
+
+    // Determine the group parent ID
+    // If this appointment has a linked_appointment_id, that's the parent
+    // Otherwise, this appointment is the parent (or standalone)
+    const parentId = appointment.linked_appointment_id || appointment.id;
+
+    // Find all appointments in this group
+    const { Op } = require('sequelize');
+    const groupAppointments = await this.findAll({
+      where: {
+        [Op.or]: [
+          { id: parentId },
+          { linked_appointment_id: parentId }
+        ]
+      },
+      order: [['link_sequence', 'ASC']],
+      ...options
+    });
+
+    return groupAppointments;
+  };
+
+  /**
+   * Get total duration of a linked appointment group
+   * @param {string} appointmentId - ID of any appointment in the group
+   * @returns {number} Total duration in minutes
+   */
+  Appointment.getGroupDuration = async function(appointmentId) {
+    const group = await this.findLinkedGroup(appointmentId);
+    if (group.length === 0) return 0;
+
+    return group.reduce((total, apt) => total + (apt.duration_minutes || 0), 0);
+  };
+
+  /**
+   * Get the group ID (parent appointment ID) for an appointment
+   * @param {string} appointmentId - ID of any appointment
+   * @returns {string|null} The group ID (parent ID) or null if standalone
+   */
+  Appointment.getGroupId = async function(appointmentId) {
+    const appointment = await this.findByPk(appointmentId);
+    if (!appointment) return null;
+
+    // If it has a linked_appointment_id, return that (it's a child)
+    // If it has link_sequence = 1 and no linked_appointment_id, it's a parent
+    // Otherwise it's standalone
+    if (appointment.linked_appointment_id) {
+      return appointment.linked_appointment_id;
+    }
+    if (appointment.link_sequence === 1) {
+      return appointment.id; // This is the parent
+    }
+    return null; // Standalone
+  };
+
+  /**
+   * Check if appointment is part of a linked group
+   * @param {string} appointmentId - ID of the appointment
+   * @returns {boolean} True if part of a linked group
+   */
+  Appointment.isLinked = async function(appointmentId) {
+    const appointment = await this.findByPk(appointmentId);
+    if (!appointment) return false;
+
+    return !!(appointment.linked_appointment_id || appointment.link_sequence === 1);
   };
 
   return Appointment;

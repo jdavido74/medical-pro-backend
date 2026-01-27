@@ -21,6 +21,7 @@ const adminRoutes = require('./src/routes/admin');
 const productRoutes = require('./src/routes/products');
 const categoryRoutes = require('./src/routes/categories');
 const tagRoutes = require('./src/routes/tags');
+const supplierRoutes = require('./src/routes/suppliers');
 
 // Medical routes
 const patientRoutes = require('./src/routes/patients');
@@ -47,6 +48,8 @@ const profileRoutes = require('./src/routes/profile');
 const practitionerAvailabilityRoutes = require('./src/routes/practitionerAvailability');
 const patientCareTeamRoutes = require('./src/routes/patientCareTeam');
 const teamsRoutes = require('./src/routes/teams');
+const machineRoutes = require('./src/routes/machines');
+const planningRoutes = require('./src/routes/planning');
 
 // User management routes (central database)
 const usersRoutes = require('./src/routes/users');
@@ -174,6 +177,7 @@ app.use(`/api/${API_VERSION}/audit`, auditRoutes);
 app.use(`/api/${API_VERSION}/products`, authMiddleware, clinicRoutingMiddleware, productRoutes);
 app.use(`/api/${API_VERSION}/categories`, authMiddleware, clinicRoutingMiddleware, categoryRoutes);
 app.use(`/api/${API_VERSION}/tags`, authMiddleware, clinicRoutingMiddleware, tagRoutes);
+app.use(`/api/${API_VERSION}/suppliers`, authMiddleware, clinicRoutingMiddleware, supplierRoutes);
 
 // Medical API routes (all use clinic-specific databases)
 app.use(`/api/${API_VERSION}/patients`, authMiddleware, clinicRoutingMiddleware, patientRoutes);
@@ -197,6 +201,8 @@ app.use(`/api/${API_VERSION}/profile`, profileRoutes);
 app.use(`/api/${API_VERSION}/availability`, practitionerAvailabilityRoutes);
 app.use(`/api/${API_VERSION}/care-team`, authMiddleware, clinicRoutingMiddleware, patientCareTeamRoutes);
 app.use(`/api/${API_VERSION}/teams`, teamsRoutes);
+app.use(`/api/${API_VERSION}/machines`, authMiddleware, clinicRoutingMiddleware, machineRoutes);
+app.use(`/api/${API_VERSION}/planning`, authMiddleware, clinicRoutingMiddleware, planningRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

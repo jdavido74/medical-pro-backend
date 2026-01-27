@@ -161,6 +161,124 @@ const transformFromDb = (item) => {
   };
 };
 
+// === Custom endpoints that don't use :id (MUST be before CRUD routes) ===
+
+/**
+ * GET /families - Get all family items with their variants
+ */
+router.get('/families', async (req, res) => {
+  try {
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
+
+    const families = await ProductService.findAll({
+      where: {
+        is_family: true,
+        is_active: true
+      },
+      include: [{
+        model: ProductService,
+        as: 'variants',
+        where: { is_active: true },
+        required: false
+      }],
+      order: [['title', 'ASC']]
+    });
+
+    res.json({
+      success: true,
+      data: families.map(transformFromDb)
+    });
+  } catch (error) {
+    console.error('[products] Error fetching families:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch families' }
+    });
+  }
+});
+
+/**
+ * GET /stats - Get catalog statistics
+ */
+router.get('/stats', async (req, res) => {
+  try {
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
+
+    const [total, active, medications, treatments, services, families, variants] = await Promise.all([
+      ProductService.count(),
+      ProductService.count({ where: { is_active: true } }),
+      ProductService.count({ where: { item_type: 'medication', is_active: true } }),
+      ProductService.count({ where: { item_type: 'treatment', is_active: true } }),
+      ProductService.count({ where: { item_type: 'service', is_active: true } }),
+      ProductService.count({ where: { is_family: true, is_active: true } }),
+      ProductService.count({ where: { is_variant: true, is_active: true } })
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        total,
+        active,
+        inactive: total - active,
+        byType: {
+          medications,
+          treatments,
+          services,
+          products: active - medications - treatments - services
+        },
+        families,
+        variants
+      }
+    });
+  } catch (error) {
+    console.error('[products] Error fetching stats:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch statistics' }
+    });
+  }
+});
+
+/**
+ * GET /for-appointments - Get items that impact appointments
+ */
+router.get('/for-appointments', async (req, res) => {
+  try {
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
+
+    const items = await ProductService.findAll({
+      where: {
+        is_active: true,
+        item_type: { [Op.in]: ['service', 'treatment'] },
+        duration: { [Op.ne]: null }
+      },
+      order: [['item_type', 'ASC'], ['title', 'ASC']]
+    });
+
+    res.json({
+      success: true,
+      data: items.map(item => ({
+        id: item.id,
+        title: item.title,
+        itemType: item.item_type,
+        duration: item.duration,
+        prepBefore: item.prep_before,
+        prepAfter: item.prep_after,
+        totalDuration: (item.prep_before || 0) + item.duration + (item.prep_after || 0),
+        unitPrice: parseFloat(item.unit_price),
+        isOverlappable: item.is_overlappable,
+        machineTypeId: item.machine_type_id
+      }))
+    });
+  } catch (error) {
+    console.error('[products] Error fetching items for appointments:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch items' }
+    });
+  }
+});
+
 // Basic CRUD routes using clinic-aware factory
 const productRoutes = clinicCrudRoutes('ProductService', {
   createSchema,
@@ -180,8 +298,53 @@ const productRoutes = clinicCrudRoutes('ProductService', {
     dbData.company_id = user.companyId;
 
     // Extract categories for later association
-    const categoryIds = data.categories || [];
+    let categoryIds = data.categories || [];
     delete dbData.categories;
+
+    // Handle variant inheritance from parent
+    if (dbData.parent_id) {
+      const ProductService = await getModel(clinicDb, 'ProductService');
+      const parent = await ProductService.findByPk(dbData.parent_id);
+
+      if (parent) {
+        // Mark as variant
+        dbData.is_variant = true;
+        dbData.is_family = false;
+
+        // Inherit type from parent
+        dbData.type = parent.type;
+        dbData.item_type = parent.item_type;
+
+        // Inherit description if not provided
+        if (!dbData.description) {
+          dbData.description = parent.description;
+        }
+
+        // Inherit provenance if not provided
+        if (!dbData.provenance) {
+          dbData.provenance = parent.provenance;
+        }
+
+        // Inherit tax rate if not provided
+        if (!dbData.tax_rate && parent.tax_rate) {
+          dbData.tax_rate = parent.tax_rate;
+        }
+
+        // Inherit category from parent if not provided
+        if (categoryIds.length === 0) {
+          // Get parent's categories
+          const parentCategories = await parent.getCategories();
+          if (parentCategories && parentCategories.length > 0) {
+            categoryIds = parentCategories.map(c => c.id);
+          }
+        }
+
+        // Mark parent as family if not already
+        if (!parent.is_family) {
+          await parent.update({ is_family: true });
+        }
+      }
+    }
 
     // Validate SKU uniqueness per clinic
     if (dbData.sku) {
@@ -194,11 +357,13 @@ const productRoutes = clinicCrudRoutes('ProductService', {
       }
     }
 
-    // Set type based on item_type for backwards compatibility
-    if (dbData.item_type === 'service') {
-      dbData.type = 'service';
-    } else {
-      dbData.type = 'product';
+    // Set type based on item_type for backwards compatibility (only if not inherited)
+    if (!dbData.parent_id) {
+      if (dbData.item_type === 'service') {
+        dbData.type = 'service';
+      } else {
+        dbData.type = 'product';
+      }
     }
 
     // Store categoryIds for onAfterCreate
@@ -257,22 +422,40 @@ const productRoutes = clinicCrudRoutes('ProductService', {
 
   // Include categories when building query
   buildQuery: async (query, queryParams, clinicDb) => {
-    const Category = await getModel(clinicDb, 'Category');
-    const Tag = await getModel(clinicDb, 'Tag');
+    try {
+      // Ensure ProductService is loaded first to set up associations
+      const ProductService = await getModel(clinicDb, 'ProductService');
+      const Category = await getModel(clinicDb, 'Category');
 
-    query.include = query.include || [];
-    query.include.push({
-      model: Category,
-      as: 'categories',
-      through: { attributes: [] },
-      attributes: ['id', 'name', 'color', 'type']
-    });
-    query.include.push({
-      model: Tag,
-      as: 'tags',
-      through: { attributes: [] },
-      attributes: ['id', 'name', 'color']
-    });
+      query.include = query.include || [];
+
+      // Add category include
+      query.include.push({
+        model: Category,
+        as: 'categories',
+        through: { attributes: [] },
+        attributes: ['id', 'name', 'color', 'type'],
+        required: false
+      });
+
+      // Add tag include only if association exists
+      try {
+        const Tag = await getModel(clinicDb, 'Tag');
+        if (ProductService.associations?.tags) {
+          query.include.push({
+            model: Tag,
+            as: 'tags',
+            through: { attributes: [] },
+            attributes: ['id', 'name', 'color'],
+            required: false
+          });
+        }
+      } catch (tagErr) {
+        console.warn('[products] Could not include tags:', tagErr.message);
+      }
+    } catch (err) {
+      console.error('[products] Error in buildQuery:', err.message);
+    }
 
     return query;
   },
@@ -283,41 +466,7 @@ const productRoutes = clinicCrudRoutes('ProductService', {
 
 router.use('/', productRoutes);
 
-// === Custom endpoints ===
-
-/**
- * GET /catalog/families - Get all family items with their variants
- */
-router.get('/families', async (req, res) => {
-  try {
-    const ProductService = await getModel(req.clinicDb, 'ProductService');
-
-    const families = await ProductService.findAll({
-      where: {
-        is_family: true,
-        is_active: true
-      },
-      include: [{
-        model: ProductService,
-        as: 'variants',
-        where: { is_active: true },
-        required: false
-      }],
-      order: [['title', 'ASC']]
-    });
-
-    res.json({
-      success: true,
-      data: families.map(transformFromDb)
-    });
-  } catch (error) {
-    console.error('[products] Error fetching families:', error);
-    res.status(500).json({
-      success: false,
-      error: { message: 'Failed to fetch families' }
-    });
-  }
-});
+// === Custom endpoints with :id parameter (after CRUD routes is OK) ===
 
 /**
  * POST /:id/variants - Add a variant to a family
@@ -354,9 +503,10 @@ router.post('/:id/variants', async (req, res) => {
     variantData.item_type = parent.item_type;
     variantData.company_id = req.user.companyId;
 
-    // Inherit some fields from parent if not provided
+    // Inherit fields from parent if not provided
     if (!variantData.provenance) variantData.provenance = parent.provenance;
     if (!variantData.tax_rate) variantData.tax_rate = parent.tax_rate;
+    if (!variantData.description) variantData.description = parent.description;
 
     const variant = await ProductService.create(variantData);
 
@@ -401,9 +551,21 @@ router.post('/:id/duplicate', async (req, res) => {
     delete duplicateData.updated_at;
     duplicateData.title = `${duplicateData.title} (copie)`;
     duplicateData.sku = duplicateData.sku ? `${duplicateData.sku}-COPY` : null;
-    duplicateData.is_family = false;
-    duplicateData.is_variant = false;
-    duplicateData.parent_id = null;
+
+    // If original is a variant, keep it as a variant in the same family
+    // If original is a family, duplicate becomes a standalone item (not a family)
+    // If original is standalone, duplicate stays standalone
+    if (original.is_variant && original.parent_id) {
+      // Keep as variant in the same family
+      duplicateData.is_family = false;
+      duplicateData.is_variant = true;
+      // parent_id is already set from original.toJSON()
+    } else {
+      // Standalone item (family becomes standalone, standalone stays standalone)
+      duplicateData.is_family = false;
+      duplicateData.is_variant = false;
+      duplicateData.parent_id = null;
+    }
 
     const duplicate = await ProductService.create(duplicateData);
 
@@ -416,88 +578,6 @@ router.post('/:id/duplicate', async (req, res) => {
     res.status(500).json({
       success: false,
       error: { message: 'Failed to duplicate item' }
-    });
-  }
-});
-
-/**
- * GET /catalog/stats - Get catalog statistics
- */
-router.get('/stats', async (req, res) => {
-  try {
-    const ProductService = await getModel(req.clinicDb, 'ProductService');
-
-    const [total, active, medications, treatments, services, families, variants] = await Promise.all([
-      ProductService.count(),
-      ProductService.count({ where: { is_active: true } }),
-      ProductService.count({ where: { item_type: 'medication', is_active: true } }),
-      ProductService.count({ where: { item_type: 'treatment', is_active: true } }),
-      ProductService.count({ where: { item_type: 'service', is_active: true } }),
-      ProductService.count({ where: { is_family: true, is_active: true } }),
-      ProductService.count({ where: { is_variant: true, is_active: true } })
-    ]);
-
-    res.json({
-      success: true,
-      data: {
-        total,
-        active,
-        inactive: total - active,
-        byType: {
-          medications,
-          treatments,
-          services,
-          products: active - medications - treatments - services
-        },
-        families,
-        variants
-      }
-    });
-  } catch (error) {
-    console.error('[products] Error fetching stats:', error);
-    res.status(500).json({
-      success: false,
-      error: { message: 'Failed to fetch statistics' }
-    });
-  }
-});
-
-/**
- * GET /catalog/for-appointments - Get items that impact appointments
- */
-router.get('/for-appointments', async (req, res) => {
-  try {
-    const ProductService = await getModel(req.clinicDb, 'ProductService');
-
-    const items = await ProductService.findAll({
-      where: {
-        is_active: true,
-        item_type: { [Op.in]: ['service', 'treatment'] },
-        duration: { [Op.ne]: null }
-      },
-      order: [['item_type', 'ASC'], ['title', 'ASC']]
-    });
-
-    res.json({
-      success: true,
-      data: items.map(item => ({
-        id: item.id,
-        title: item.title,
-        itemType: item.item_type,
-        duration: item.duration,
-        prepBefore: item.prep_before,
-        prepAfter: item.prep_after,
-        totalDuration: (item.prep_before || 0) + item.duration + (item.prep_after || 0),
-        unitPrice: parseFloat(item.unit_price),
-        isOverlappable: item.is_overlappable,
-        machineTypeId: item.machine_type_id
-      }))
-    });
-  } catch (error) {
-    console.error('[products] Error fetching items for appointments:', error);
-    res.status(500).json({
-      success: false,
-      error: { message: 'Failed to fetch items' }
     });
   }
 });
@@ -698,6 +778,309 @@ router.delete('/:id/tags/:tagId', async (req, res) => {
     res.status(500).json({
       success: false,
       error: { message: 'Failed to remove tag' }
+    });
+  }
+});
+
+// ============================================
+// SUPPLIER ENDPOINTS
+// ============================================
+
+/**
+ * GET /:id/suppliers - Get suppliers for a product
+ */
+router.get('/:id/suppliers', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
+    const ProductSupplier = await getModel(req.clinicDb, 'ProductSupplier');
+    const Supplier = await getModel(req.clinicDb, 'Supplier');
+    const { transformProductSupplierToApi } = require('../models/ProductSupplier');
+    const { transformSupplierToApi } = require('../models/Supplier');
+
+    const product = await ProductService.findByPk(id);
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Product not found' }
+      });
+    }
+
+    // Get suppliers for this product
+    const productSuppliers = await ProductSupplier.findAll({
+      where: { product_id: id },
+      include: [{
+        model: Supplier,
+        as: 'supplier'
+      }],
+      order: [['is_primary', 'DESC'], ['created_at', 'ASC']]
+    });
+
+    // If product is a variant, also get inherited suppliers from parent
+    let inheritedSuppliers = [];
+    if (product.parent_id) {
+      const parentSuppliers = await ProductSupplier.findAll({
+        where: { product_id: product.parent_id },
+        include: [{
+          model: Supplier,
+          as: 'supplier'
+        }],
+        order: [['is_primary', 'DESC'], ['created_at', 'ASC']]
+      });
+      inheritedSuppliers = parentSuppliers.map(ps => ({
+        ...transformProductSupplierToApi(ps),
+        isInherited: true
+      }));
+    }
+
+    res.json({
+      success: true,
+      data: {
+        suppliers: productSuppliers.map(ps => ({
+          ...transformProductSupplierToApi(ps),
+          isInherited: false
+        })),
+        inheritedSuppliers
+      }
+    });
+  } catch (error) {
+    console.error('[products] Error getting product suppliers:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to get product suppliers' }
+    });
+  }
+});
+
+/**
+ * POST /:id/suppliers - Add a supplier to a product
+ */
+router.post('/:id/suppliers', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { supplierId, isPrimary, supplierSku, unitCost, currency, minOrderQuantity, leadTimeDays, notes } = req.body;
+
+    if (!supplierId) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'supplierId is required' }
+      });
+    }
+
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
+    const ProductSupplier = await getModel(req.clinicDb, 'ProductSupplier');
+    const Supplier = await getModel(req.clinicDb, 'Supplier');
+    const { transformProductSupplierToApi } = require('../models/ProductSupplier');
+
+    const product = await ProductService.findByPk(id);
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Product not found' }
+      });
+    }
+
+    const supplier = await Supplier.findOne({
+      where: { id: supplierId, company_id: req.user.companyId }
+    });
+    if (!supplier) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Supplier not found' }
+      });
+    }
+
+    // Check if association already exists
+    const existing = await ProductSupplier.findOne({
+      where: { product_id: id, supplier_id: supplierId }
+    });
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        error: { message: 'Supplier is already associated with this product' }
+      });
+    }
+
+    // If setting as primary, unset other primaries
+    if (isPrimary) {
+      await ProductSupplier.update(
+        { is_primary: false },
+        { where: { product_id: id } }
+      );
+    }
+
+    const productSupplier = await ProductSupplier.create({
+      product_id: id,
+      supplier_id: supplierId,
+      is_primary: isPrimary || false,
+      supplier_sku: supplierSku,
+      unit_cost: unitCost,
+      currency: currency || 'EUR',
+      min_order_quantity: minOrderQuantity,
+      lead_time_days: leadTimeDays,
+      notes
+    });
+
+    // Reload with supplier
+    await productSupplier.reload({
+      include: [{ model: Supplier, as: 'supplier' }]
+    });
+
+    res.status(201).json({
+      success: true,
+      data: transformProductSupplierToApi(productSupplier),
+      message: 'Supplier added to product'
+    });
+  } catch (error) {
+    console.error('[products] Error adding supplier to product:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to add supplier to product' }
+    });
+  }
+});
+
+/**
+ * PUT /:id/suppliers/:supplierId - Update product-supplier relationship
+ */
+router.put('/:id/suppliers/:supplierId', async (req, res) => {
+  try {
+    const { id, supplierId } = req.params;
+    const { isPrimary, supplierSku, unitCost, currency, minOrderQuantity, leadTimeDays, notes } = req.body;
+
+    const ProductSupplier = await getModel(req.clinicDb, 'ProductSupplier');
+    const Supplier = await getModel(req.clinicDb, 'Supplier');
+    const { transformProductSupplierToApi } = require('../models/ProductSupplier');
+
+    const productSupplier = await ProductSupplier.findOne({
+      where: { product_id: id, supplier_id: supplierId }
+    });
+
+    if (!productSupplier) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Product-supplier relationship not found' }
+      });
+    }
+
+    // If setting as primary, unset other primaries
+    if (isPrimary === true) {
+      await ProductSupplier.update(
+        { is_primary: false },
+        { where: { product_id: id, supplier_id: { [Op.ne]: supplierId } } }
+      );
+    }
+
+    await productSupplier.update({
+      is_primary: isPrimary !== undefined ? isPrimary : productSupplier.is_primary,
+      supplier_sku: supplierSku !== undefined ? supplierSku : productSupplier.supplier_sku,
+      unit_cost: unitCost !== undefined ? unitCost : productSupplier.unit_cost,
+      currency: currency !== undefined ? currency : productSupplier.currency,
+      min_order_quantity: minOrderQuantity !== undefined ? minOrderQuantity : productSupplier.min_order_quantity,
+      lead_time_days: leadTimeDays !== undefined ? leadTimeDays : productSupplier.lead_time_days,
+      notes: notes !== undefined ? notes : productSupplier.notes
+    });
+
+    // Reload with supplier
+    await productSupplier.reload({
+      include: [{ model: Supplier, as: 'supplier' }]
+    });
+
+    res.json({
+      success: true,
+      data: transformProductSupplierToApi(productSupplier),
+      message: 'Product-supplier relationship updated'
+    });
+  } catch (error) {
+    console.error('[products] Error updating product supplier:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to update product supplier' }
+    });
+  }
+});
+
+/**
+ * DELETE /:id/suppliers/:supplierId - Remove a supplier from a product
+ */
+router.delete('/:id/suppliers/:supplierId', async (req, res) => {
+  try {
+    const { id, supplierId } = req.params;
+
+    const ProductSupplier = await getModel(req.clinicDb, 'ProductSupplier');
+
+    const productSupplier = await ProductSupplier.findOne({
+      where: { product_id: id, supplier_id: supplierId }
+    });
+
+    if (!productSupplier) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Product-supplier relationship not found' }
+      });
+    }
+
+    await productSupplier.destroy();
+
+    res.json({
+      success: true,
+      message: 'Supplier removed from product'
+    });
+  } catch (error) {
+    console.error('[products] Error removing supplier from product:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to remove supplier from product' }
+    });
+  }
+});
+
+/**
+ * PUT /:id/suppliers/:supplierId/primary - Set a supplier as primary
+ */
+router.put('/:id/suppliers/:supplierId/primary', async (req, res) => {
+  try {
+    const { id, supplierId } = req.params;
+
+    const ProductSupplier = await getModel(req.clinicDb, 'ProductSupplier');
+    const Supplier = await getModel(req.clinicDb, 'Supplier');
+    const { transformProductSupplierToApi } = require('../models/ProductSupplier');
+
+    const productSupplier = await ProductSupplier.findOne({
+      where: { product_id: id, supplier_id: supplierId }
+    });
+
+    if (!productSupplier) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Product-supplier relationship not found' }
+      });
+    }
+
+    // Unset all other primaries for this product
+    await ProductSupplier.update(
+      { is_primary: false },
+      { where: { product_id: id } }
+    );
+
+    // Set this one as primary
+    await productSupplier.update({ is_primary: true });
+
+    // Reload with supplier
+    await productSupplier.reload({
+      include: [{ model: Supplier, as: 'supplier' }]
+    });
+
+    res.json({
+      success: true,
+      data: transformProductSupplierToApi(productSupplier),
+      message: 'Supplier set as primary'
+    });
+  } catch (error) {
+    console.error('[products] Error setting primary supplier:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to set primary supplier' }
     });
   }
 });
