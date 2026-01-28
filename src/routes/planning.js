@@ -123,7 +123,11 @@ const transformAppointment = (apt) => {
       id: data.patient.id,
       firstName: data.patient.first_name,
       lastName: data.patient.last_name,
-      fullName: `${data.patient.first_name} ${data.patient.last_name}`
+      fullName: `${data.patient.first_name} ${data.patient.last_name}`,
+      email: data.patient.email,
+      phone: data.patient.phone,
+      mobile: data.patient.mobile,
+      preferredLanguage: data.patient.preferred_language
     } : undefined,
     machineId: data.machine_id,
     machine: data.machine ? {
@@ -257,7 +261,7 @@ router.get('/calendar', async (req, res) => {
         {
           model: Patient,
           as: 'patient',
-          attributes: ['id', 'first_name', 'last_name']
+          attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'mobile', 'preferred_language']
         },
         {
           model: Machine,
