@@ -60,6 +60,7 @@ const querySchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
   consentType: Joi.string().optional(),
+  status: Joi.string().valid('draft', 'active', 'inactive').optional(),
   search: Joi.string().optional()
 });
 
@@ -84,6 +85,16 @@ const templateRoutes = clinicCrudRoutes('ConsentTemplate', {
     create: PERMISSIONS.CONSENT_TEMPLATES_CREATE,
     update: PERMISSIONS.CONSENT_TEMPLATES_EDIT,
     delete: PERMISSIONS.CONSENT_TEMPLATES_DELETE
+  },
+
+  // Exclude camelCase params from direct filters (they need mapping)
+  excludeFromFilters: ['consentType'],
+
+  // Map camelCase query params to snake_case column names
+  buildQuery: async (queryOptions, params) => {
+    if (params.consentType) {
+      queryOptions.where.consent_type = params.consentType;
+    }
   },
 
   // Transform camelCase to snake_case and inject company_id before create
