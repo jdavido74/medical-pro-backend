@@ -81,11 +81,15 @@ const createMultiTreatmentSchema = Joi.object({
   patientId: Joi.string().uuid().required(),
   date: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
   startTime: Joi.string().pattern(/^\d{2}:\d{2}$/).required(),
+  providerId: Joi.string().uuid().allow(null, '').optional(),
+  assistantId: Joi.string().uuid().allow(null, '').optional(),
   treatments: Joi.array().items(
     Joi.object({
       treatmentId: Joi.string().uuid().required(),
       machineId: Joi.string().uuid().required(),
-      duration: Joi.number().integer().min(5).max(480).required()
+      duration: Joi.number().integer().min(5).max(480).required(),
+      providerId: Joi.string().uuid().allow(null, '').optional(),
+      assistantId: Joi.string().uuid().allow(null, '').optional()
     })
   ).min(1).max(10).required(),
   notes: Joi.string().allow('', null).optional(),
@@ -607,7 +611,7 @@ router.get('/resources', async (req, res) => {
       }),
       HealthcareProvider.findAll({
         where: { is_active: true },
-        attributes: ['id', 'first_name', 'last_name', 'specialties', 'color'],
+        attributes: ['id', 'first_name', 'last_name', 'specialties', 'color', 'role', 'profession'],
         order: [['last_name', 'ASC']]
       })
     ]);
@@ -630,6 +634,8 @@ router.get('/resources', async (req, res) => {
           specialty: p.specialties?.[0] || null, // Get first specialty for backward compatibility
           specialties: p.specialties || [],
           color: p.color,
+          role: p.role,
+          profession: p.profession,
           type: 'provider'
         }))
       }
@@ -827,12 +833,13 @@ router.post('/appointments/multi-treatment', async (req, res) => {
       });
     }
 
-    const { patientId, date, startTime, treatments, notes, priority } = value;
+    const { patientId, date, startTime, treatments, notes, priority, providerId: groupProviderId, assistantId: groupAssistantId } = value;
 
     const Appointment = await getModel(req.clinicDb, 'Appointment');
     const Patient = await getModel(req.clinicDb, 'Patient');
     const Machine = await getModel(req.clinicDb, 'Machine');
     const ProductService = await getModel(req.clinicDb, 'ProductService');
+    const HealthcareProvider = await getModel(req.clinicDb, 'HealthcareProvider');
 
     // Calculate times for each treatment segment
     let currentStartMinutes = planningService.timeToMinutes(startTime);
@@ -866,6 +873,10 @@ router.post('/appointments/multi-treatment', async (req, res) => {
       // Get treatment info for title
       const treatmentInfo = await ProductService.findByPk(treatment.treatmentId);
 
+      // Determine provider and assistant (per-treatment override or group-level)
+      const appointmentProviderId = treatment.providerId || groupProviderId || null;
+      const appointmentAssistantId = treatment.assistantId || groupAssistantId || null;
+
       // Create appointment
       const appointmentData = {
         facility_id: req.user.facilityId || req.user.companyId,
@@ -877,6 +888,8 @@ router.post('/appointments/multi-treatment', async (req, res) => {
         end_time: segmentEndTime,
         duration_minutes: treatment.duration,
         machine_id: treatment.machineId,
+        provider_id: appointmentProviderId,
+        assistant_id: appointmentAssistantId,
         service_id: treatment.treatmentId,
         title: treatmentInfo?.title || 'Treatment',
         notes: i === 0 ? notes : null, // Only add notes to first appointment
@@ -905,6 +918,8 @@ router.post('/appointments/multi-treatment', async (req, res) => {
         include: [
           { model: Patient, as: 'patient', attributes: ['id', 'first_name', 'last_name'] },
           { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
+          { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
+          { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
           { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration'], required: false }
         ]
       });
@@ -989,11 +1004,12 @@ router.put('/appointments/group/:groupId', async (req, res) => {
 
   try {
     const { groupId } = req.params;
-    const { date, startTime, notes, priority, status } = req.body;
+    const { date, startTime, notes, priority, status, providerId, assistantId } = req.body;
 
     const Appointment = await getModel(req.clinicDb, 'Appointment');
     const Patient = await getModel(req.clinicDb, 'Patient');
     const Machine = await getModel(req.clinicDb, 'Machine');
+    const HealthcareProvider = await getModel(req.clinicDb, 'HealthcareProvider');
     const ProductService = await getModel(req.clinicDb, 'ProductService');
 
     const groupAppointments = await Appointment.findLinkedGroup(groupId);
@@ -1045,6 +1061,8 @@ router.put('/appointments/group/:groupId', async (req, res) => {
         if (notes !== undefined && apt.link_sequence === 1) updateData.notes = notes;
         if (priority) updateData.priority = priority;
         if (status) updateData.status = status;
+        if (providerId !== undefined) updateData.provider_id = providerId || null;
+        if (assistantId !== undefined) updateData.assistant_id = assistantId || null;
 
         await apt.update(updateData, { transaction });
         currentStartMinutes += apt.duration_minutes;
@@ -1056,6 +1074,8 @@ router.put('/appointments/group/:groupId', async (req, res) => {
         if (notes !== undefined && apt.link_sequence === 1) updateData.notes = notes;
         if (priority) updateData.priority = priority;
         if (status) updateData.status = status;
+        if (providerId !== undefined) updateData.provider_id = providerId || null;
+        if (assistantId !== undefined) updateData.assistant_id = assistantId || null;
 
         if (Object.keys(updateData).length > 0) {
           await apt.update(updateData, { transaction });
@@ -1070,6 +1090,8 @@ router.put('/appointments/group/:groupId', async (req, res) => {
       include: [
         { model: Patient, as: 'patient', attributes: ['id', 'first_name', 'last_name'] },
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
+        { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
+        { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
         { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration'], required: false }
       ]
     });
@@ -1089,6 +1111,48 @@ router.put('/appointments/group/:groupId', async (req, res) => {
     res.status(500).json({
       success: false,
       error: { message: 'Failed to update appointment group' }
+    });
+  }
+});
+
+/**
+ * GET /planning/providers/:id/check-availability - Check provider availability for a time slot
+ */
+router.get('/providers/:id/check-availability', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date, startTime, endTime, excludeAppointmentId } = req.query;
+
+    if (!date || !startTime || !endTime) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'date, startTime, and endTime are required' }
+      });
+    }
+
+    const result = await planningService.checkProviderConflicts(
+      req.clinicDb,
+      id,
+      date,
+      startTime,
+      endTime,
+      excludeAppointmentId || null
+    );
+
+    res.json({
+      success: true,
+      data: {
+        available: !result.hasConsultationConflict && !result.hasTreatmentConflict,
+        hasConsultationConflict: result.hasConsultationConflict,
+        hasTreatmentConflict: result.hasTreatmentConflict,
+        conflicts: result.conflicts
+      }
+    });
+  } catch (error) {
+    console.error('[planning] Error checking provider availability:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to check provider availability' }
     });
   }
 });

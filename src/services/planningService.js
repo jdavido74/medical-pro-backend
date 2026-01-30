@@ -709,6 +709,82 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
   };
 }
 
+/**
+ * Check provider conflicts for a given date and time range
+ * @param {Sequelize} clinicDb - Clinic database connection
+ * @param {string} providerId - Healthcare provider ID
+ * @param {string} date - Date string (YYYY-MM-DD)
+ * @param {string} startTime - Start time (HH:MM)
+ * @param {string} endTime - End time (HH:MM)
+ * @param {string|null} excludeAppointmentId - Appointment ID to exclude (for edit mode)
+ * @returns {Object} { hasConsultationConflict, hasTreatmentConflict, conflicts }
+ */
+async function checkProviderConflicts(clinicDb, providerId, date, startTime, endTime, excludeAppointmentId = null) {
+  const Appointment = await getModel(clinicDb, 'Appointment');
+  const Patient = await getModel(clinicDb, 'Patient');
+
+  const where = {
+    appointment_date: date,
+    provider_id: providerId,
+    status: { [Op.notIn]: ['cancelled'] }
+  };
+
+  if (excludeAppointmentId) {
+    where.id = { [Op.ne]: excludeAppointmentId };
+  }
+
+  const appointments = await Appointment.findAll({
+    where,
+    include: [
+      {
+        model: Patient,
+        as: 'patient',
+        attributes: ['id', 'first_name', 'last_name'],
+        required: false
+      }
+    ],
+    attributes: ['id', 'category', 'start_time', 'end_time', 'title', 'patient_id'],
+    order: [['start_time', 'ASC']]
+  });
+
+  // Filter overlapping appointments
+  const conflicts = [];
+  let hasConsultationConflict = false;
+  let hasTreatmentConflict = false;
+
+  for (const apt of appointments) {
+    const aptStart = apt.start_time.substring(0, 5);
+    const aptEnd = apt.end_time.substring(0, 5);
+
+    if (timeRangesOverlap(startTime, endTime, aptStart, aptEnd)) {
+      const patientName = apt.patient
+        ? `${apt.patient.first_name} ${apt.patient.last_name}`
+        : null;
+
+      conflicts.push({
+        id: apt.id,
+        category: apt.category,
+        startTime: aptStart,
+        endTime: aptEnd,
+        title: apt.title,
+        patientName
+      });
+
+      if (apt.category === 'consultation') {
+        hasConsultationConflict = true;
+      } else {
+        hasTreatmentConflict = true;
+      }
+    }
+  }
+
+  return {
+    hasConsultationConflict,
+    hasTreatmentConflict,
+    conflicts
+  };
+}
+
 module.exports = {
   getTreatmentSlots,
   getConsultationSlots,
@@ -719,5 +795,6 @@ module.exports = {
   generateTimeSlots,
   timeToMinutes,
   minutesToTime,
-  getMultiTreatmentSlots
+  getMultiTreatmentSlots,
+  checkProviderConflicts
 };
