@@ -84,16 +84,97 @@ function timeRangesOverlap(start1, end1, start2, end2) {
 }
 
 /**
+ * Parse clinic operating_hours JSONB for a given day name.
+ * Supports two formats stored in clinic_settings.operating_hours:
+ *   - Simple:  { enabled, start, end }
+ *   - Lunch:   { enabled, hasLunchBreak, morning: {start,end}, afternoon: {start,end} }
+ * Returns array of { open, close } ranges (matches legacy format used by the rest of the service).
+ */
+function parseClinicHoursForDay(operatingHours, dayName) {
+  if (!operatingHours || !operatingHours[dayName]) return null;
+
+  const dayHours = operatingHours[dayName];
+  if (!dayHours.enabled) return null;
+
+  // Lunch break format → two ranges
+  if (dayHours.hasLunchBreak && dayHours.morning && dayHours.afternoon) {
+    const ranges = [];
+    if (dayHours.morning.start && dayHours.morning.end) {
+      ranges.push({ open: dayHours.morning.start, close: dayHours.morning.end });
+    }
+    if (dayHours.afternoon.start && dayHours.afternoon.end) {
+      ranges.push({ open: dayHours.afternoon.start, close: dayHours.afternoon.end });
+    }
+    return ranges.length > 0 ? ranges : null;
+  }
+
+  // Simple format → single range
+  if (dayHours.start && dayHours.end) {
+    return [{ open: dayHours.start, close: dayHours.end }];
+  }
+
+  return null;
+}
+
+/**
  * Get clinic hours for a specific date
+ * Reads from clinic_settings table; falls back to DEFAULT_CLINIC_HOURS.
+ * Also checks closed_dates.
  * @param {Sequelize} clinicDb - Clinic database connection
  * @param {string} date - Date string (YYYY-MM-DD)
- * @returns {Object|null} { open, close } or null if closed
+ * @returns {Object|null} { open, close } or null if closed.
+ *   For lunch-break clinics returns the first range (morning) — callers that
+ *   need all ranges should use getClinicHoursRanges() instead.
  */
 async function getClinicHours(clinicDb, date) {
-  // TODO: Load from clinic_settings table
-  // For now, use default hours
+  const ranges = await getClinicHoursRanges(clinicDb, date);
+  if (!ranges || ranges.length === 0) return null;
+
+  // Legacy callers expect a single { open, close } object.
+  // If there are multiple ranges (lunch break), return a merged range covering the whole day
+  // so that slot generation between open→close still works (booked lunch slots will be filtered
+  // out by existing-appointment checks).
+  if (ranges.length === 1) return ranges[0];
+
+  // Merge: earliest open → latest close
+  return {
+    open: ranges[0].open,
+    close: ranges[ranges.length - 1].close
+  };
+}
+
+/**
+ * Get all clinic hour ranges for a specific date (supports lunch breaks).
+ * @returns {Array|null} Array of { open, close } or null if closed
+ */
+async function getClinicHoursRanges(clinicDb, date) {
+  try {
+    const [results] = await clinicDb.query(
+      'SELECT operating_hours, closed_dates FROM clinic_settings LIMIT 1'
+    );
+    const settings = results?.[0];
+
+    if (settings) {
+      // Check closed dates
+      const closedDates = settings.closed_dates;
+      if (closedDates && Array.isArray(closedDates)) {
+        const isClosed = closedDates.some(cd => cd.date === date);
+        if (isClosed) return null;
+      }
+
+      // Parse operating hours for the day
+      const dayOfWeek = getDayOfWeek(date);
+      const parsed = parseClinicHoursForDay(settings.operating_hours, dayOfWeek);
+      if (parsed) return parsed;
+    }
+  } catch (err) {
+    console.warn('[planningService] Could not load clinic_settings, using defaults:', err.message);
+  }
+
+  // Fallback to hardcoded defaults
   const dayOfWeek = getDayOfWeek(date);
-  return DEFAULT_CLINIC_HOURS[dayOfWeek] || null;
+  const fallback = DEFAULT_CLINIC_HOURS[dayOfWeek];
+  return fallback ? [fallback] : null;
 }
 
 /**
@@ -168,10 +249,10 @@ async function getPractitionerAvailability(clinicDb, providerId, date) {
  * @returns {Array} Array of available time ranges [{ start, end }]
  */
 async function getMachineAvailability(clinicDb, machineId, date) {
-  const clinicHours = await getClinicHours(clinicDb, date);
-  if (!clinicHours) return []; // Clinic closed
+  const ranges = await getClinicHoursRanges(clinicDb, date);
+  if (!ranges || ranges.length === 0) return []; // Clinic closed
 
-  return [clinicHours];
+  return ranges;
 }
 
 /**
@@ -720,32 +801,26 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
  * @returns {Object} { hasConsultationConflict, hasTreatmentConflict, conflicts }
  */
 async function checkProviderConflicts(clinicDb, providerId, date, startTime, endTime, excludeAppointmentId = null) {
-  const Appointment = await getModel(clinicDb, 'Appointment');
-  const Patient = await getModel(clinicDb, 'Patient');
-
-  const where = {
-    appointment_date: date,
-    provider_id: providerId,
-    status: { [Op.notIn]: ['cancelled'] }
-  };
+  // Use raw query to avoid association issues with Patient model
+  let sql = `
+    SELECT a.id, a.category, a.start_time, a.end_time, a.title,
+           p.first_name AS patient_first_name, p.last_name AS patient_last_name
+    FROM appointments a
+    LEFT JOIN patients p ON a.patient_id = p.id
+    WHERE a.appointment_date = :date
+      AND a.provider_id = :providerId
+      AND a.status NOT IN ('cancelled')
+  `;
+  const replacements = { date, providerId };
 
   if (excludeAppointmentId) {
-    where.id = { [Op.ne]: excludeAppointmentId };
+    sql += ' AND a.id != :excludeId';
+    replacements.excludeId = excludeAppointmentId;
   }
 
-  const appointments = await Appointment.findAll({
-    where,
-    include: [
-      {
-        model: Patient,
-        as: 'patient',
-        attributes: ['id', 'first_name', 'last_name'],
-        required: false
-      }
-    ],
-    attributes: ['id', 'category', 'start_time', 'end_time', 'title', 'patient_id'],
-    order: [['start_time', 'ASC']]
-  });
+  sql += ' ORDER BY a.start_time ASC';
+
+  const [appointments] = await clinicDb.query(sql, { replacements });
 
   // Filter overlapping appointments
   const conflicts = [];
@@ -753,12 +828,13 @@ async function checkProviderConflicts(clinicDb, providerId, date, startTime, end
   let hasTreatmentConflict = false;
 
   for (const apt of appointments) {
-    const aptStart = apt.start_time.substring(0, 5);
-    const aptEnd = apt.end_time.substring(0, 5);
+    const aptStart = apt.start_time?.substring(0, 5);
+    const aptEnd = apt.end_time?.substring(0, 5);
+    if (!aptStart || !aptEnd) continue;
 
     if (timeRangesOverlap(startTime, endTime, aptStart, aptEnd)) {
-      const patientName = apt.patient
-        ? `${apt.patient.first_name} ${apt.patient.last_name}`
+      const patientName = apt.patient_first_name
+        ? `${apt.patient_first_name} ${apt.patient_last_name}`
         : null;
 
       conflicts.push({
@@ -790,6 +866,7 @@ module.exports = {
   getConsultationSlots,
   getAllSlots,
   getClinicHours,
+  getClinicHoursRanges,
   getPractitionerAvailability,
   getMachineAvailability,
   generateTimeSlots,
