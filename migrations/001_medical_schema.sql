@@ -191,10 +191,7 @@ CREATE TABLE appointments (
 
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    -- Constraints
-    UNIQUE(provider_id, appointment_date, start_time)
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Medical Records (adapted from invoices)
