@@ -45,7 +45,8 @@ const createAppointmentSchema = Joi.object({
   notes: Joi.string().allow('', null).optional(),
   type: Joi.string().valid('consultation', 'followup', 'emergency', 'checkup', 'procedure', 'teleconsultation', 'specialist', 'vaccination', 'surgery').default('procedure'),
   priority: Joi.string().valid('low', 'normal', 'high', 'urgent').default('normal'),
-  color: Joi.string().pattern(/^#[0-9A-Fa-f]{6}$/).optional()
+  color: Joi.string().pattern(/^#[0-9A-Fa-f]{6}$/).optional(),
+  skipPatientOverlapCheck: Joi.boolean().optional()
 });
 
 const getSlotsSchema = Joi.object({
@@ -93,7 +94,8 @@ const createMultiTreatmentSchema = Joi.object({
     })
   ).min(1).max(10).required(),
   notes: Joi.string().allow('', null).optional(),
-  priority: Joi.string().valid('low', 'normal', 'high', 'urgent').default('normal')
+  priority: Joi.string().valid('low', 'normal', 'high', 'urgent').default('normal'),
+  skipPatientOverlapCheck: Joi.boolean().optional()
 });
 
 /**
@@ -1153,6 +1155,67 @@ router.get('/providers/:id/check-availability', async (req, res) => {
     res.status(500).json({
       success: false,
       error: { message: 'Failed to check provider availability' }
+    });
+  }
+});
+
+/**
+ * GET /planning/patients/:id/check-overlap - Check if patient already has appointments overlapping the given time
+ */
+router.get('/patients/:id/check-overlap', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date, startTime, endTime, excludeAppointmentIds, segments } = req.query;
+
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'date is required' }
+      });
+    }
+
+    // Build segments array from either explicit segments param or single startTime/endTime
+    let segmentsArray;
+    if (segments) {
+      try {
+        segmentsArray = JSON.parse(segments);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'segments must be valid JSON' }
+        });
+      }
+    } else if (startTime && endTime) {
+      segmentsArray = [{ startTime, endTime }];
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Either segments or startTime+endTime are required' }
+      });
+    }
+
+    // Parse excludeAppointmentIds (comma-separated)
+    const excludeIds = excludeAppointmentIds
+      ? excludeAppointmentIds.split(',').map(s => s.trim()).filter(Boolean)
+      : [];
+
+    const result = await planningService.checkPatientConflicts(
+      req.clinicDb,
+      id,
+      date,
+      segmentsArray,
+      excludeIds
+    );
+
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('[planning] Error checking patient overlap:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to check patient overlap' }
     });
   }
 });

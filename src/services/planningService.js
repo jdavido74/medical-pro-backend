@@ -375,6 +375,23 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
     }
   }
 
+  // Method 3: If still no machines, get all active machines as fallback
+  // This allows non-machine treatments (e.g. overlappable treatments) to still get slots
+  if (machines.length === 0) {
+    try {
+      const allMachines = await Machine.findAll({
+        where: { is_active: true },
+        raw: true
+      });
+      if (allMachines.length > 0) {
+        machines = allMachines;
+        console.log(`[planningService] Using all ${machines.length} active machines as fallback for single treatment: ${treatment.title}`);
+      }
+    } catch (fallbackErr) {
+      console.error('[planningService] Fallback machine query failed:', fallbackErr.message);
+    }
+  }
+
   if (machines.length === 0) {
     return { slots: [], machines: [], message: 'No machines available for this treatment' };
   }
@@ -861,6 +878,78 @@ async function checkProviderConflicts(clinicDb, providerId, date, startTime, end
   };
 }
 
+/**
+ * Check patient conflicts for a given date and time segments.
+ * Verifies the patient does not already have an appointment overlapping the
+ * requested time range(s).  Accepts an array of segments so that
+ * multi-treatment (chained) bookings can be checked in one call.
+ *
+ * @param {Sequelize} clinicDb - Clinic database connection
+ * @param {string} patientId - Patient UUID
+ * @param {string} date - Date string (YYYY-MM-DD)
+ * @param {Array} segments - [{ startTime, endTime }]
+ * @param {Array} excludeAppointmentIds - Appointment IDs to exclude (edit mode)
+ * @returns {Object} { hasConflict, conflicts }
+ */
+async function checkPatientConflicts(clinicDb, patientId, date, segments, excludeAppointmentIds = []) {
+  let sql = `
+    SELECT a.id, a.category, a.start_time, a.end_time, a.title,
+           m.name AS machine_name,
+           hp.first_name AS provider_first_name, hp.last_name AS provider_last_name
+    FROM appointments a
+    LEFT JOIN machines m ON a.machine_id = m.id
+    LEFT JOIN healthcare_providers hp ON a.provider_id = hp.id
+    WHERE a.patient_id = :patientId
+      AND a.appointment_date = :date
+      AND a.status NOT IN ('cancelled')
+  `;
+  const replacements = { patientId, date };
+
+  if (excludeAppointmentIds.length > 0) {
+    sql += ' AND a.id NOT IN (:excludeIds)';
+    replacements.excludeIds = excludeAppointmentIds;
+  }
+
+  sql += ' ORDER BY a.start_time ASC';
+
+  const [appointments] = await clinicDb.query(sql, { replacements });
+
+  const conflicts = [];
+
+  for (const apt of appointments) {
+    const aptStart = apt.start_time?.substring(0, 5);
+    const aptEnd = apt.end_time?.substring(0, 5);
+    if (!aptStart || !aptEnd) continue;
+
+    for (const seg of segments) {
+      if (timeRangesOverlap(seg.startTime, seg.endTime, aptStart, aptEnd)) {
+        // Avoid duplicate conflict entries for the same appointment
+        if (!conflicts.find(c => c.id === apt.id)) {
+          const providerName = apt.provider_first_name
+            ? `${apt.provider_first_name} ${apt.provider_last_name}`
+            : null;
+
+          conflicts.push({
+            id: apt.id,
+            category: apt.category,
+            startTime: aptStart,
+            endTime: aptEnd,
+            title: apt.title,
+            machineName: apt.machine_name || null,
+            providerName
+          });
+        }
+        break; // one overlap per appointment is enough
+      }
+    }
+  }
+
+  return {
+    hasConflict: conflicts.length > 0,
+    conflicts
+  };
+}
+
 module.exports = {
   getTreatmentSlots,
   getConsultationSlots,
@@ -873,5 +962,6 @@ module.exports = {
   timeToMinutes,
   minutesToTime,
   getMultiTreatmentSlots,
-  checkProviderConflicts
+  checkProviderConflicts,
+  checkPatientConflicts
 };

@@ -30,6 +30,7 @@ const createClinicPatientCareTeam = require('../models/clinic/PatientCareTeam');
 const createClinicAppointmentAction = require('../models/clinic/AppointmentAction');
 const createClinicScheduledJob = require('../models/clinic/ScheduledJob');
 const createClinicTreatmentConsentTemplate = require('../models/clinic/TreatmentConsentTemplate');
+const createClinicSystemCategory = require('../models/clinic/SystemCategory');
 
 // Catalog models
 const createProductService = require('../models/ProductService');
@@ -61,6 +62,7 @@ const CLINIC_MODEL_FACTORIES = {
   AppointmentAction: createClinicAppointmentAction,
   ScheduledJob: createClinicScheduledJob,
   TreatmentConsentTemplate: createClinicTreatmentConsentTemplate,
+  SystemCategory: createClinicSystemCategory,
   // Catalog models
   ProductService: createProductService,
   Tag: createTag,

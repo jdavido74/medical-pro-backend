@@ -52,6 +52,7 @@ const machineRoutes = require('./src/routes/machines');
 const planningRoutes = require('./src/routes/planning');
 const appointmentActionsRoutes = require('./src/routes/appointment-actions');
 const treatmentConsentsRoutes = require('./src/routes/treatment-consents');
+const systemCategoriesRoutes = require('./src/routes/system-categories');
 const publicAppointmentRoutes = require('./src/routes/public-appointment');
 
 // User management routes (central database)
@@ -212,6 +213,8 @@ app.use(`/api/${API_VERSION}/planning`, authMiddleware, clinicRoutingMiddleware,
 app.use(`/api/${API_VERSION}/planning`, authMiddleware, clinicRoutingMiddleware, appointmentActionsRoutes);
 // Treatment consent associations
 app.use(`/api/${API_VERSION}/treatment-consents`, authMiddleware, clinicRoutingMiddleware, treatmentConsentsRoutes);
+// System categories (consent types, appointment types, specialties, departments)
+app.use(`/api/${API_VERSION}/system-categories`, authMiddleware, clinicRoutingMiddleware, systemCategoriesRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
