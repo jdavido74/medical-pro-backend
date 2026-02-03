@@ -16,7 +16,8 @@ const {
 } = require('../base/clinicConfigSchemas');
 const { authMiddleware } = require('../middleware/auth');
 const { clinicRoutingMiddleware } = require('../middleware/clinicRouting');
-const { UserClinicMembership, Company } = require('../models'); // For multi-clinic auth
+const { UserClinicMembership, Company, User, sequelize } = require('../models');
+const { v4: uuidv4 } = require('uuid');
 const emailService = require('../services/emailService');
 
 // Apply middleware
@@ -334,6 +335,67 @@ router.post('/', async (req, res) => {
 
     const createdProvider = result[0];
     console.log('[healthcareProviders] Healthcare provider created in clinic DB:', createdProvider?.id);
+
+    // ============================================================
+    // ÉTAPE 2b: Mode mot de passe direct → créer le user central
+    // (même logique que POST /auth/set-password pour les invitations)
+    // Sans user central, le praticien ne peut pas se connecter.
+    // ============================================================
+    if (!value.send_invitation && hashedPassword) {
+      try {
+        const validRoles = ['super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly'];
+        const centralRole = validRoles.includes(value.role) ? value.role : 'practitioner';
+
+        // Vérifier si un user central existe déjà avec cet email
+        let centralUser = await User.findOne({
+          where: { email: value.email.toLowerCase() }
+        });
+
+        if (centralUser) {
+          // Mettre à jour le user existant
+          await centralUser.update({
+            password_hash: hashedPassword,
+            first_name: value.first_name,
+            last_name: value.last_name,
+            role: centralRole,
+            is_active: true,
+            email_verified: true
+          });
+        } else {
+          // Créer le user central
+          centralUser = await User.create({
+            id: uuidv4(),
+            email: value.email.toLowerCase(),
+            password_hash: hashedPassword,
+            first_name: value.first_name,
+            last_name: value.last_name,
+            role: centralRole,
+            company_id: req.clinicId,
+            email_verified: true,
+            is_active: true
+          });
+        }
+
+        // Lier le healthcare_provider au user central
+        await req.clinicDb.query(`
+          UPDATE healthcare_providers
+          SET central_user_id = :central_user_id,
+              auth_migrated_to_central = true,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = :provider_id
+        `, {
+          replacements: {
+            central_user_id: centralUser.id,
+            provider_id: createdProvider.id
+          }
+        });
+
+        console.log('[healthcareProviders] Central user created/linked for:', value.email, '→', centralUser.id);
+      } catch (centralUserError) {
+        console.error('[healthcareProviders] Failed to create central user (non-critical):', centralUserError);
+        // Don't fail — provider is created, admin can fix auth later
+      }
+    }
 
     // ============================================================
     // ÉTAPE 3: Créer la membership dans la base CENTRALE (pour auth)
