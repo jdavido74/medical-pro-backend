@@ -32,6 +32,11 @@ const createClinicScheduledJob = require('../models/clinic/ScheduledJob');
 const createClinicTreatmentConsentTemplate = require('../models/clinic/TreatmentConsentTemplate');
 const createClinicSystemCategory = require('../models/clinic/SystemCategory');
 
+// Billing models
+const createClinicDocument = require('../models/clinic/Document');
+const createClinicDocumentItem = require('../models/clinic/DocumentItem');
+const createClinicDocumentSequence = require('../models/clinic/DocumentSequence');
+
 // Catalog models
 const createProductService = require('../models/ProductService');
 const createTag = require('../models/Tag');
@@ -63,6 +68,10 @@ const CLINIC_MODEL_FACTORIES = {
   ScheduledJob: createClinicScheduledJob,
   TreatmentConsentTemplate: createClinicTreatmentConsentTemplate,
   SystemCategory: createClinicSystemCategory,
+  // Billing models
+  Document: createClinicDocument,
+  DocumentItem: createClinicDocumentItem,
+  DocumentSequence: createClinicDocumentSequence,
   // Catalog models
   ProductService: createProductService,
   Tag: createTag,
@@ -448,6 +457,80 @@ async function setupAssociations(clinicDb, modelName, model, dbModels) {
           dbModels.Appointment.hasMany(model, {
             foreignKey: 'appointment_id',
             as: 'actions'
+          });
+        }
+        break;
+
+      case 'Document':
+        // Document has many DocumentItems
+        if (!dbModels.DocumentItem) {
+          dbModels.DocumentItem = CLINIC_MODEL_FACTORIES.DocumentItem(clinicDb);
+        }
+        if (!model.associations?.items) {
+          model.hasMany(dbModels.DocumentItem, {
+            foreignKey: 'document_id',
+            as: 'items',
+            onDelete: 'CASCADE'
+          });
+        }
+
+        // Document belongs to Patient (optional)
+        if (!dbModels.Patient) {
+          dbModels.Patient = CLINIC_MODEL_FACTORIES.Patient(clinicDb);
+        }
+        if (!model.associations?.patient) {
+          model.belongsTo(dbModels.Patient, {
+            foreignKey: 'patient_id',
+            as: 'patient'
+          });
+        }
+
+        // Document belongs to Appointment (optional)
+        if (!dbModels.Appointment) {
+          dbModels.Appointment = CLINIC_MODEL_FACTORIES.Appointment(clinicDb);
+        }
+        if (!model.associations?.appointment) {
+          model.belongsTo(dbModels.Appointment, {
+            foreignKey: 'appointment_id',
+            as: 'appointment'
+          });
+        }
+
+        // Document belongs to HealthcareProvider (optional)
+        if (!dbModels.HealthcareProvider) {
+          dbModels.HealthcareProvider = CLINIC_MODEL_FACTORIES.HealthcareProvider(clinicDb);
+        }
+        if (!model.associations?.practitioner) {
+          model.belongsTo(dbModels.HealthcareProvider, {
+            foreignKey: 'practitioner_id',
+            as: 'practitioner'
+          });
+        }
+
+        // Self-references for conversion chain
+        if (!model.associations?.convertedFrom) {
+          model.belongsTo(model, {
+            foreignKey: 'converted_from_id',
+            as: 'convertedFrom'
+          });
+        }
+        if (!model.associations?.convertedTo) {
+          model.belongsTo(model, {
+            foreignKey: 'converted_to_id',
+            as: 'convertedTo'
+          });
+        }
+        break;
+
+      case 'DocumentItem':
+        // DocumentItem belongs to Document
+        if (!dbModels.Document) {
+          dbModels.Document = CLINIC_MODEL_FACTORIES.Document(clinicDb);
+        }
+        if (!model.associations?.document) {
+          model.belongsTo(dbModels.Document, {
+            foreignKey: 'document_id',
+            as: 'document'
           });
         }
         break;

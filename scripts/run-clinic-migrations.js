@@ -50,7 +50,9 @@ const NEW_MIGRATIONS = [
   'clinic_050_appointment_workflow_fields.sql',
   'clinic_051_system_categories.sql',
   'clinic_052_seed_system_categories.sql',
-  'clinic_053_update_consent_type_constraint.sql'
+  'clinic_053_update_consent_type_constraint.sql',
+  'clinic_054_drop_provider_appointment_unique.sql',
+  'clinic_055_documents_billing.sql'
 ];
 
 async function getClinicDatabases() {
