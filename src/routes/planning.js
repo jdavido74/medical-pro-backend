@@ -362,11 +362,20 @@ router.post('/appointments', async (req, res) => {
     }
 
     if (providerId) {
-      const hasConflict = await Appointment.checkConflict(providerId, date, startTime, endTime);
-      if (hasConflict) {
+      const providerConflict = await planningService.checkProviderConflicts(
+        req.clinicDb, providerId, date, startTime, endTime
+      );
+      // Consultation conflicts always block.
+      // Treatment conflicts only block if the NEW appointment is a consultation.
+      const shouldBlock = providerConflict.hasConsultationConflict ||
+        (category === 'consultation' && providerConflict.hasTreatmentConflict);
+      if (shouldBlock) {
         return res.status(409).json({
           success: false,
-          error: { message: 'Provider is not available at this time' }
+          error: {
+            message: 'Provider is not available at this time',
+            conflicts: providerConflict.conflicts
+          }
         });
       }
     }
