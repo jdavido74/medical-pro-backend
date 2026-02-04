@@ -11,6 +11,8 @@ const { getModel } = require('../base/ModelFactory');
 const { logger } = require('../utils/logger');
 const { Op } = require('sequelize');
 const documentService = require('../services/documentService');
+const facturxService = require('../services/facturxService');
+const pdfService = require('../services/pdfService');
 
 const router = express.Router();
 
@@ -695,7 +697,7 @@ router.post('/:id/duplicate', async (req, res, next) => {
 
 /**
  * GET /documents/:id/pdf
- * Generate / download PDF (placeholder — Factur-X in Phase 4)
+ * Generate PDF with Factur-X CII XML embedding (invoices/credit_notes only)
  */
 router.get('/:id/pdf', async (req, res, next) => {
   try {
@@ -710,13 +712,61 @@ router.get('/:id/pdf', async (req, res, next) => {
       return res.status(404).json({ success: false, error: { message: 'Document not found' } });
     }
 
-    // Phase 4 will implement full Factur-X PDF generation.
-    // For now, return the document data for client-side PDF rendering.
-    res.json({
-      success: true,
-      data: doc,
-      message: 'PDF generation will be available in a future update. Use client-side rendering.'
+    const docData = doc.toJSON();
+    const items = docData.items || [];
+
+    // Load billing settings for seller info, legal mentions, conditions
+    let billingSettings = {};
+    try {
+      const [settingsResult] = await req.clinicDb.query(
+        `SELECT billing_settings FROM clinic_settings WHERE facility_id = :clinicId`,
+        { replacements: { clinicId: req.clinicId } }
+      );
+      billingSettings = settingsResult.length > 0 ? (settingsResult[0].billing_settings || {}) : {};
+    } catch (e) {
+      logger.warn('[documents/pdf] Could not load billing settings:', e.message);
+    }
+
+    // Step 1: Generate visual PDF
+    let pdfBuffer = await pdfService.generateDocumentPDF(docData, items, { billingSettings });
+
+    // Step 2: For invoices and credit notes, generate Factur-X XML and embed
+    const isEInvoice = ['invoice', 'credit_note'].includes(docData.document_type);
+    if (isEInvoice) {
+      const profile = billingSettings.facturxProfile || 'EN16931';
+
+      // Enrich document with seller info from billing settings
+      const enrichedDoc = {
+        ...docData,
+        seller_siren: docData.seller_siren || billingSettings.seller?.siren,
+        seller_vat_number: docData.seller_vat_number || billingSettings.seller?.vatNumber,
+        seller_email: docData.seller_email || billingSettings.seller?.email
+      };
+
+      const xmlString = facturxService.generateXML(enrichedDoc, items, profile);
+
+      // Validate XML before embedding
+      const validation = facturxService.validateXML(xmlString, profile);
+      if (!validation.valid) {
+        logger.warn('[documents/pdf] Factur-X XML validation warnings:', validation.errors);
+      }
+
+      // Embed XML into PDF/A-3b
+      try {
+        pdfBuffer = await pdfService.embedFacturX(pdfBuffer, xmlString);
+      } catch (embedErr) {
+        logger.warn('[documents/pdf] Factur-X embedding failed, serving plain PDF:', embedErr.message);
+      }
+    }
+
+    // Set response headers
+    const filename = `${docData.document_number || 'document'}.pdf`;
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${filename}"`,
+      'Content-Length': pdfBuffer.length
     });
+    res.send(pdfBuffer);
   } catch (error) {
     next(error);
   }
