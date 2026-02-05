@@ -162,7 +162,9 @@ const transformAppointment = (apt) => {
     service: data.service ? {
       id: data.service.id,
       title: data.service.title,
-      duration: data.service.duration
+      duration: data.service.duration,
+      unitPrice: data.service.unit_price != null ? parseFloat(data.service.unit_price) : null,
+      taxRate: data.service.tax_rate != null ? parseFloat(data.service.tax_rate) : null
     } : undefined,
     // Workflow fields
     consentStatus: data.consent_status,
@@ -414,7 +416,7 @@ router.post('/appointments', async (req, res) => {
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
         { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
         { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
-        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration'], required: false }
+        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
       ]
     });
 
@@ -465,7 +467,7 @@ router.get('/appointments/:id', async (req, res) => {
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
         { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
         { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
-        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price'], required: false }
+        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
       ]
     });
 
@@ -555,7 +557,7 @@ router.put('/appointments/:id', async (req, res) => {
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
         { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
         { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
-        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration'], required: false }
+        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
       ]
     });
 
@@ -931,7 +933,7 @@ router.post('/appointments/multi-treatment', async (req, res) => {
           { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
           { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
           { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
-          { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration'], required: false }
+          { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
         ]
       });
       return transformAppointment(apt);
@@ -976,7 +978,7 @@ router.get('/appointments/group/:groupId', async (req, res) => {
         { model: Patient, as: 'patient', attributes: ['id', 'first_name', 'last_name'] },
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
         { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
-        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration'], required: false }
+        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
       ]
     });
 
@@ -1103,7 +1105,7 @@ router.put('/appointments/group/:groupId', async (req, res) => {
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
         { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
         { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
-        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration'], required: false }
+        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
       ]
     });
 
