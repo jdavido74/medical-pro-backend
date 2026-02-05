@@ -306,6 +306,67 @@ router.get('/next-number', async (req, res, next) => {
   }
 });
 
+// ============================================================================
+// Billing Settings Routes (MUST be before /:id to avoid route conflict)
+// ============================================================================
+
+/**
+ * GET /documents/billing-settings
+ * Read billing configuration from clinic_settings
+ */
+router.get('/billing-settings', async (req, res, next) => {
+  try {
+    const [result] = await req.clinicDb.query(
+      `SELECT billing_settings FROM clinic_settings WHERE facility_id = :clinicId`,
+      { replacements: { clinicId: req.clinicId } }
+    );
+
+    const settings = result.length > 0 ? (result[0].billing_settings || {}) : {};
+
+    res.json({ success: true, data: settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PUT /documents/billing-settings
+ * Update billing configuration
+ */
+router.put('/billing-settings', async (req, res, next) => {
+  try {
+    const billingSettings = req.body;
+
+    const [result] = await req.clinicDb.query(
+      `UPDATE clinic_settings
+       SET billing_settings = :settings, updated_at = CURRENT_TIMESTAMP
+       WHERE facility_id = :clinicId
+       RETURNING billing_settings`,
+      {
+        replacements: {
+          clinicId: req.clinicId,
+          settings: JSON.stringify(billingSettings)
+        }
+      }
+    );
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Clinic settings not found' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result[0].billing_settings,
+      message: 'Billing settings updated successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 /**
  * GET /documents/:id
  * Get document detail with items
@@ -767,67 +828,6 @@ router.get('/:id/pdf', async (req, res, next) => {
       'Content-Length': pdfBuffer.length
     });
     res.send(pdfBuffer);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ============================================================================
-// Billing Settings Routes
-// ============================================================================
-
-/**
- * GET /documents/billing-settings
- * Read billing configuration from clinic_settings
- */
-router.get('/billing-settings', async (req, res, next) => {
-  try {
-    const [result] = await req.clinicDb.query(
-      `SELECT billing_settings FROM clinic_settings WHERE facility_id = :clinicId`,
-      { replacements: { clinicId: req.clinicId } }
-    );
-
-    const settings = result.length > 0 ? (result[0].billing_settings || {}) : {};
-
-    res.json({ success: true, data: settings });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * PUT /documents/billing-settings
- * Update billing configuration
- */
-router.put('/billing-settings', async (req, res, next) => {
-  try {
-    const billingSettings = req.body;
-
-    const [result] = await req.clinicDb.query(
-      `UPDATE clinic_settings
-       SET billing_settings = :settings, updated_at = CURRENT_TIMESTAMP
-       WHERE facility_id = :clinicId
-       RETURNING billing_settings`,
-      {
-        replacements: {
-          clinicId: req.clinicId,
-          settings: JSON.stringify(billingSettings)
-        }
-      }
-    );
-
-    if (result.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: { message: 'Clinic settings not found' }
-      });
-    }
-
-    res.json({
-      success: true,
-      data: result[0].billing_settings,
-      message: 'Billing settings updated successfully'
-    });
   } catch (error) {
     next(error);
   }
