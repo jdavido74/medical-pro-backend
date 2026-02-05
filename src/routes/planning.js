@@ -292,7 +292,7 @@ router.get('/calendar', async (req, res) => {
         {
           model: ProductService,
           as: 'service',
-          attributes: ['id', 'title', 'duration'],
+          attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'],
           required: false
         }
       ],
