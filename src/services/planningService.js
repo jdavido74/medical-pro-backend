@@ -331,9 +331,43 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
   }
 
   const slotDuration = duration || treatment.duration || 30;
+  const isOverlappable = treatment.is_overlappable === true;
 
-  // Get machines that can perform this treatment
-  // Use a simpler query without include to avoid association issues
+  // For overlappable treatments (no machine required), return clinic hours as available slots
+  // These treatments don't block machines and can overlap with other appointments
+  if (isOverlappable) {
+    console.log(`[planningService] Treatment "${treatment.title}" is overlappable, returning clinic hours slots`);
+    const clinicRanges = await getClinicHoursRanges(clinicDb, date);
+    if (!clinicRanges || clinicRanges.length === 0) {
+      return { slots: [], machines: [], message: 'Clinic closed on this date', isOverlappable: true };
+    }
+
+    // Generate slots from clinic hours (no machine blocking)
+    const availableSlots = calculateAvailableSlots(clinicRanges, [], slotDuration);
+    const slots = availableSlots.map(slot => ({
+      ...slot,
+      machineId: null, // No machine for overlappable treatments
+      machineName: null,
+      machineColor: null,
+      duration: slotDuration,
+      isOverlappable: true
+    }));
+
+    return {
+      slots,
+      allSlots: slots,
+      machines: [],
+      treatment: {
+        id: treatment.id,
+        title: treatment.title,
+        duration: slotDuration,
+        isOverlappable: true
+      },
+      isOverlappable: true
+    };
+  }
+
+  // For machine-based treatments, find associated machines
   let machines = [];
 
   // Check if association exists and use it
@@ -375,25 +409,10 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
     }
   }
 
-  // Method 3: If still no machines, get all active machines as fallback
-  // This allows non-machine treatments (e.g. overlappable treatments) to still get slots
+  // If no machines found for a non-overlappable treatment, it's a configuration error
   if (machines.length === 0) {
-    try {
-      const allMachines = await Machine.findAll({
-        where: { is_active: true },
-        raw: true
-      });
-      if (allMachines.length > 0) {
-        machines = allMachines;
-        console.log(`[planningService] Using all ${machines.length} active machines as fallback for single treatment: ${treatment.title}`);
-      }
-    } catch (fallbackErr) {
-      console.error('[planningService] Fallback machine query failed:', fallbackErr.message);
-    }
-  }
-
-  if (machines.length === 0) {
-    return { slots: [], machines: [], message: 'No machines available for this treatment' };
+    console.warn(`[planningService] No machines configured for non-overlappable treatment: ${treatment.title}`);
+    return { slots: [], machines: [], message: 'No machines configured for this treatment. Please associate machines in the catalog.' };
   }
 
   const allSlots = [];
@@ -404,7 +423,7 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
     const availability = await getMachineAvailability(clinicDb, machine.id, date);
     if (availability.length === 0) continue;
 
-    // Get existing appointments for this machine
+    // Get existing appointments for this machine (only non-overlappable ones block)
     const bookedSlots = await getExistingAppointments(clinicDb, 'machine', machine.id, date);
 
     // Calculate available slots
@@ -465,7 +484,8 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
     treatment: {
       id: treatment.id,
       title: treatment.title,
-      duration: slotDuration
+      duration: slotDuration,
+      isOverlappable: false
     }
   };
 }

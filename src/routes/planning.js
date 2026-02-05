@@ -352,9 +352,20 @@ router.post('/appointments', async (req, res) => {
     const startMinutes = planningService.timeToMinutes(startTime);
     const endTime = planningService.minutesToTime(startMinutes + duration);
 
+    // Check if treatment is overlappable (no machine required)
+    let effectiveMachineId = machineId;
+    if (category === 'treatment' && (treatmentId || serviceId)) {
+      const ProductService = await getModel(req.clinicDb, 'ProductService');
+      const treatment = await ProductService.findByPk(treatmentId || serviceId);
+      if (treatment && treatment.is_overlappable === true) {
+        // Overlappable treatments don't use machines
+        effectiveMachineId = null;
+      }
+    }
+
     // Check for conflicts
-    if (category === 'treatment' && machineId) {
-      const hasConflict = await Appointment.checkMachineConflict(machineId, date, startTime, endTime);
+    if (category === 'treatment' && effectiveMachineId) {
+      const hasConflict = await Appointment.checkMachineConflict(effectiveMachineId, date, startTime, endTime);
       if (hasConflict) {
         return res.status(409).json({
           success: false,
@@ -392,7 +403,7 @@ router.post('/appointments', async (req, res) => {
       start_time: startTime,
       end_time: endTime,
       duration_minutes: duration,
-      machine_id: machineId || null,
+      machine_id: effectiveMachineId || null,
       provider_id: providerId || null,
       assistant_id: assistantId || null,
       service_id: serviceId || treatmentId || null,
