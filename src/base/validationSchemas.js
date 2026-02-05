@@ -381,7 +381,9 @@ module.exports.createMedicalRecordSchema = Joi.object({
     end_date: Joi.date().iso().allow(null).optional(),
     status: Joi.string().valid('active', 'completed', 'stopped', 'paused').allow('', null).optional(),
     prescribed_by: Joi.string().allow('', null).optional(),
-    notes: Joi.string().allow('', null).optional()
+    notes: Joi.string().allow('', null).optional(),
+    catalog_item_id: Joi.string().allow('', null).optional(),
+    catalog_item_type: Joi.string().allow('', null).optional()
   })).optional(),
 
   // Treatment plan (all fields optional and can be empty)
