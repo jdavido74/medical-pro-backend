@@ -426,8 +426,14 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
     // Get existing appointments for this machine (only non-overlappable ones block)
     const bookedSlots = await getExistingAppointments(clinicDb, 'machine', machine.id, date);
 
+    // DEBUG: Log booked slots (excluding cancelled)
+    console.log(`[planningService] Machine ${machine.name} on ${date}:`);
+    console.log(`  Clinic hours:`, availability);
+    console.log(`  Booked slots (non-cancelled):`, bookedSlots.map(b => `${b.start}-${b.end}`).join(', ') || 'none');
+
     // Calculate available slots
     const availableSlots = calculateAvailableSlots(availability, bookedSlots, slotDuration);
+    console.log(`  Available ${slotDuration}min slots:`, availableSlots.length);
 
     // Add machine info to each slot
     for (const slot of availableSlots) {
