@@ -440,6 +440,184 @@ Accessible sur: `https://app.medimaestro.com:19999`
 
 ---
 
+## CI/CD - Déploiement Automatique
+
+### Architecture de Déploiement
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        GitHub Repositories                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│  medical-pro-backend     medical-pro-admin     medical-pro (frontend)  │
+│         │                       │                      │               │
+│         ▼                       ▼                      ▼               │
+│   push to master          push to master         push to master        │
+│         │                       │                      │               │
+│         ▼                       ▼                      ▼               │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                    GitHub Actions                                │   │
+│  │  - Workflow: deploy-production.yml                              │   │
+│  │  - Uses: appleboy/ssh-action                                    │   │
+│  │  - Secrets: PROD_HOST, PROD_SSH_KEY, PROD_SSH_PORT              │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                 │                                       │
+│                                 ▼ SSH (port 2222)                       │
+└─────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Production Server (72.62.51.173)                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│  User: deploy (permissions limitées)                                    │
+│  Actions autorisées:                                                    │
+│    - git fetch/pull dans /var/www/                                      │
+│    - npm ci / npm run build                                             │
+│    - sudo pm2 restart (NOPASSWD)                                        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Secrets GitHub Configurés
+
+| Repository | Secret | Description |
+|------------|--------|-------------|
+| medical-pro-backend | `PROD_HOST` | 72.62.51.173 |
+| medical-pro-backend | `PROD_SSH_PORT` | 2222 |
+| medical-pro-backend | `PROD_SSH_KEY` | Clé privée ED25519 (deploy user) |
+| medical-pro-admin | `PROD_HOST` | 72.62.51.173 |
+| medical-pro-admin | `PROD_SSH_PORT` | 2222 |
+| medical-pro-admin | `PROD_SSH_KEY` | Clé privée ED25519 (deploy user) |
+
+### Utilisateur Deploy
+
+| Propriété | Valeur |
+|-----------|--------|
+| **Username** | deploy |
+| **Home** | /home/deploy |
+| **Clé SSH** | /home/deploy/.ssh/id_ed25520 |
+| **Permissions sudo** | pm2 uniquement (NOPASSWD) |
+| **Groupes** | deploy, www-data |
+
+### Workflow de Déploiement
+
+1. **Push sur master/main** → GitHub Actions déclenché automatiquement
+2. **SSH vers production** → Connexion avec clé deploy
+3. **git fetch + reset** → Récupération du code
+4. **npm ci** → Installation des dépendances
+5. **npm run build** → Compilation (frontend/admin)
+6. **pm2 restart** → Redémarrage du service
+7. **Health check** → Vérification du endpoint /health
+
+### Déclenchement Manuel
+
+Possible via GitHub → Actions → "Run workflow"
+
+---
+
+## Sécurité Admin Portal
+
+### Double Authentification (2FA/TOTP)
+
+| Composant | Description |
+|-----------|-------------|
+| **Type** | TOTP (Time-based One-Time Password) |
+| **Apps compatibles** | Google Authenticator, Authy, 1Password |
+| **Algorithme** | HMAC-SHA1, 6 digits, 30 secondes |
+| **Backup codes** | 10 codes à usage unique, hashés bcrypt |
+| **Chiffrement secret** | AES-256 avec clé dans `TOTP_ENCRYPTION_KEY` |
+
+### Flux d'Authentification Admin
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        Admin Login Flow                                  │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1. Saisie email/password                                               │
+│         │                                                                │
+│         ▼                                                                │
+│  2. Vérification credentials (bcrypt)                                   │
+│         │                                                                │
+│         ├─── Échec ──► Incrément rate limit ──► Message erreur          │
+│         │                                                                │
+│         ▼ Succès                                                         │
+│  3. Vérification 2FA activé ?                                           │
+│         │                                                                │
+│         ├─── Non ──► Connexion réussie ──► Dashboard                    │
+│         │                                                                │
+│         ▼ Oui                                                            │
+│  4. Demande code TOTP                                                   │
+│         │                                                                │
+│         ▼                                                                │
+│  5. Vérification code (TOTP ou backup)                                  │
+│         │                                                                │
+│         ├─── Échec ──► Message erreur ──► Retry                         │
+│         │                                                                │
+│         ▼ Succès                                                         │
+│  6. Génération tokens JWT ──► Stockage sessionStorage                   │
+│         │                                                                │
+│         ▼                                                                │
+│  7. Accès Dashboard Admin                                               │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Endpoints 2FA
+
+| Endpoint | Méthode | Description |
+|----------|---------|-------------|
+| `/api/v1/auth/2fa/status` | GET | État 2FA de l'utilisateur |
+| `/api/v1/auth/2fa/setup` | POST | Initialiser configuration 2FA |
+| `/api/v1/auth/2fa/verify-setup` | POST | Valider et activer 2FA |
+| `/api/v1/auth/2fa/validate` | POST | Valider code pendant login |
+| `/api/v1/auth/2fa/disable` | POST | Désactiver 2FA |
+| `/api/v1/auth/2fa/regenerate-backup` | POST | Nouveaux codes backup |
+
+### Migration Base de Données
+
+**Fichier**: `migrations/central_006_add_totp_fields.sql`
+
+```sql
+ALTER TABLE users ADD COLUMN totp_enabled BOOLEAN DEFAULT false;
+ALTER TABLE users ADD COLUMN totp_secret VARCHAR(255);       -- Chiffré AES-256
+ALTER TABLE users ADD COLUMN totp_backup_codes TEXT[];       -- Hashés bcrypt
+ALTER TABLE users ADD COLUMN totp_enabled_at TIMESTAMP;
+```
+
+### Mesures de Sécurité Implémentées
+
+| Mesure | Implémentation |
+|--------|----------------|
+| **Rate limiting login** | 5 tentatives / 15 minutes (client-side) |
+| **Stockage tokens** | sessionStorage (pas localStorage) |
+| **Expiration token** | Vérification côté client avant requêtes |
+| **Validation input** | Email format, password 8+ chars |
+| **Headers sécurité** | X-Requested-With pour CSRF |
+| **Timeout requêtes** | 10 secondes max |
+
+---
+
+## Admin Portal (medical-pro-admin)
+
+### Informations
+
+| Propriété | Valeur |
+|-----------|--------|
+| **URL** | https://admin.medimaestro.com |
+| **Emplacement** | /var/www/medical-pro-admin |
+| **Repository** | github.com/jdavido74/medical-pro-admin |
+| **Process PM2** | admin |
+| **Port** | 3002 (dev) / fichiers statiques (prod) |
+
+### Fonctionnalités
+
+- Gestion des cliniques (CRUD)
+- Gestion des utilisateurs super_admin
+- Provisionnement des bases de données cliniques
+- Monitoring santé des services
+- Configuration 2FA obligatoire pour accès
+
+---
+
 ## Historique des Modifications
 
 | Date | Modification |
@@ -447,8 +625,11 @@ Accessible sur: `https://app.medimaestro.com:19999`
 | 2026-02-08 | Installation initiale complète |
 | 2026-02-08 | Configuration SSL (principal + wildcard) |
 | 2026-02-08 | Sécurisation SSH (clé uniquement) |
+| 2026-02-09 | Ajout 2FA (TOTP) pour admin portal |
+| 2026-02-09 | Configuration CI/CD GitHub Actions |
+| 2026-02-09 | Création utilisateur deploy avec permissions limitées |
 
 ---
 
-*Document mis à jour: 8 février 2026*
-*Installation réalisée avec Claude Code*
+*Document mis à jour: 9 février 2026*
+*Installation et maintenance avec Claude Code*
