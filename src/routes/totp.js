@@ -6,10 +6,21 @@
 
 const express = require('express');
 const router = express.Router();
-const { authenticateToken, requireSuperAdmin } = require('../middleware/auth');
+const { authMiddleware } = require('../middleware/auth');
 const totpService = require('../services/totpService');
 const { getCentralDbConnection } = require('../config/database');
-const logger = require('../utils/logger');
+const { logger } = require('../utils/logger');
+
+// Middleware to require super_admin role
+const requireSuperAdmin = (req, res, next) => {
+  if (req.user?.role !== 'super_admin') {
+    return res.status(403).json({
+      success: false,
+      error: 'Access denied. Super admin privileges required.'
+    });
+  }
+  next();
+};
 
 // Encryption key for TOTP secrets (should be in environment)
 const ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || process.env.JWT_SECRET;
@@ -18,7 +29,7 @@ const ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || process.env.JWT_SECRET
  * GET /api/v1/auth/2fa/status
  * Get 2FA status for current user
  */
-router.get('/status', authenticateToken, async (req, res) => {
+router.get('/status', authMiddleware, async (req, res) => {
   try {
     const centralDb = getCentralDbConnection();
     const [user] = await centralDb.query(
@@ -54,7 +65,7 @@ router.get('/status', authenticateToken, async (req, res) => {
  * Initialize 2FA setup - generates secret and returns QR code data
  * Only for super_admin users
  */
-router.post('/setup', authenticateToken, requireSuperAdmin, async (req, res) => {
+router.post('/setup', authMiddleware, requireSuperAdmin, async (req, res) => {
   try {
     const centralDb = getCentralDbConnection();
 
@@ -113,7 +124,7 @@ router.post('/setup', authenticateToken, requireSuperAdmin, async (req, res) => 
  * POST /api/v1/auth/2fa/verify-setup
  * Verify the TOTP code and enable 2FA
  */
-router.post('/verify-setup', authenticateToken, requireSuperAdmin, async (req, res) => {
+router.post('/verify-setup', authMiddleware, requireSuperAdmin, async (req, res) => {
   try {
     const { code } = req.body;
 
@@ -277,7 +288,7 @@ router.post('/validate', async (req, res) => {
  * POST /api/v1/auth/2fa/disable
  * Disable 2FA for current user
  */
-router.post('/disable', authenticateToken, requireSuperAdmin, async (req, res) => {
+router.post('/disable', authMiddleware, requireSuperAdmin, async (req, res) => {
   try {
     const { code, password } = req.body;
 
@@ -355,7 +366,7 @@ router.post('/disable', authenticateToken, requireSuperAdmin, async (req, res) =
  * POST /api/v1/auth/2fa/regenerate-backup
  * Generate new backup codes (invalidates old ones)
  */
-router.post('/regenerate-backup', authenticateToken, requireSuperAdmin, async (req, res) => {
+router.post('/regenerate-backup', authMiddleware, requireSuperAdmin, async (req, res) => {
   try {
     const { code } = req.body;
 
