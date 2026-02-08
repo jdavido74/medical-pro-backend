@@ -25,7 +25,7 @@ MEMORY_WARNING_PERCENT=90
 MEMORY_CRITICAL_PERCENT=95
 
 # Alert configuration
-ADMIN_EMAIL="${ADMIN_EMAIL:-admin@votreclinique.es}"
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@medimaestro.com}"
 ALERT_LOG="/var/log/medicalpro-alerts.log"
 SLACK_WEBHOOK_FILE="/root/.secrets/slack_webhook"
 

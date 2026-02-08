@@ -20,8 +20,8 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 SSH_PORT="${SSH_PORT:-2222}"
 ADMIN_USER="${ADMIN_USER:-adminpro}"
-DOMAIN="${DOMAIN:-app.votreclinique.es}"
-ADMIN_EMAIL="${ADMIN_EMAIL:-admin@votreclinique.es}"
+DOMAIN="${DOMAIN:-app.medimaestro.com}"
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@medimaestro.com}"
 
 # Colors for output
 RED='\033[0;31m'

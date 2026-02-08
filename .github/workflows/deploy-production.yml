@@ -72,7 +72,7 @@ jobs:
     if: github.ref == 'refs/heads/master'
     environment:
       name: production
-      url: https://app.votreclinique.es
+      url: https://app.medimaestro.com
 
     steps:
       - name: Checkout code

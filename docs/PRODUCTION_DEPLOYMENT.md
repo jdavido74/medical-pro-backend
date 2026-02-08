@@ -21,7 +21,7 @@
 ### Informations à préparer
 
 - [ ] IP du VPS Hostinger production
-- [ ] Nom de domaine (ex: app.votreclinique.es)
+- [ ] Nom de domaine (ex: app.medimaestro.com)
 - [ ] Accès root SSH au nouveau serveur
 - [ ] Compte Backblaze/Hetzner pour sauvegardes externes (optionnel)
 - [ ] Compte SMTP production (SendGrid, Mailgun, OVH...)
@@ -50,10 +50,10 @@ curl -O https://raw.githubusercontent.com/jdavido74/medical-pro-backend/master/s
 chmod +x server-init.sh
 
 # Personnaliser les variables si nécessaire
-export DOMAIN="app.votreclinique.es"
+export DOMAIN="app.medimaestro.com"
 export SSH_PORT="2222"
 export ADMIN_USER="adminpro"
-export ADMIN_EMAIL="admin@votreclinique.es"
+export ADMIN_EMAIL="admin@medimaestro.com"
 
 # Exécuter
 sudo ./server-init.sh
@@ -298,7 +298,7 @@ rm /etc/nginx/sites-enabled/default
 
 # Éditer pour votre domaine
 nano /etc/nginx/sites-available/medicalpro
-# Remplacer "app.votreclinique.es" par votre domaine
+# Remplacer "app.medimaestro.com" par votre domaine
 
 # Tester et recharger
 nginx -t
@@ -308,7 +308,7 @@ systemctl reload nginx
 ### 4.2 Obtenir certificat SSL
 
 ```bash
-certbot --nginx -d app.votreclinique.es --non-interactive --agree-tos -m admin@votreclinique.es
+certbot --nginx -d app.medimaestro.com --non-interactive --agree-tos -m admin@medimaestro.com
 ```
 
 ---
