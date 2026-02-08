@@ -58,6 +58,7 @@ const publicAppointmentRoutes = require('./src/routes/public-appointment');
 // User management routes (central database)
 const usersRoutes = require('./src/routes/users');
 const auditRoutes = require('./src/routes/audit');
+const totpRoutes = require('./src/routes/totp');
 
 // Import middleware
 const errorHandler = require('./src/middleware/errorHandler');
@@ -167,6 +168,7 @@ app.use(`/api/${API_VERSION}/public`, clinicRoutingMiddleware, publicAppointment
 
 // API routes
 app.use(`/api/${API_VERSION}/auth`, authRoutes);
+app.use(`/api/${API_VERSION}/auth/2fa`, totpRoutes);
 
 // Apply clinic routing middleware to all clinic-specific routes
 // Middleware chain: auth -> clinicRouting (provides req.clinicDb)

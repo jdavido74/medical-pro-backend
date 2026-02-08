@@ -16,7 +16,8 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../config/jwt');
 const { Company, User, UserClinicMembership, sequelize } = require('../models');
-const { getClinicConnection } = require('../config/connectionManager');
+const { getClinicConnection, getCentralConnection } = require('../config/connectionManager');
+const { getCentralDbConnection } = require('../config/database');
 const { logger } = require('../utils/logger');
 const Joi = require('joi');
 const emailService = require('../services/emailService');
@@ -58,7 +59,9 @@ const loginSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().required(),
   rememberMe: Joi.boolean().default(false),
-  companyId: Joi.string().uuid().optional().allow(null) // For multi-clinic: specify which clinic to login to
+  companyId: Joi.string().uuid().optional().allow(null), // For multi-clinic: specify which clinic to login to
+  totpCode: Joi.string().length(6).pattern(/^\d+$/).optional().allow(null, '') // 6-digit TOTP code or backup code
+    .messages({ 'string.pattern.base': 'TOTP code must be 6 digits' })
 });
 
 const refreshTokenSchema = Joi.object({
@@ -430,6 +433,82 @@ router.post('/login', async (req, res, next) => {
           instructions: 'Check your email for a verification link.'
         }
       });
+    }
+
+    // ============================================================
+    // ÉTAPE 2.5: Vérifier la double authentification (2FA/TOTP)
+    // ============================================================
+    const { totpCode } = value;
+
+    // Check if user has 2FA enabled
+    const centralDb = getCentralDbConnection();
+    const [userWith2FA] = await centralDb.query(
+      'SELECT totp_enabled, totp_secret, totp_backup_codes FROM users WHERE id = $1',
+      [centralUser.id]
+    );
+
+    if (userWith2FA && userWith2FA.totp_enabled) {
+      // 2FA is enabled - check if code was provided
+      if (!totpCode) {
+        // No code provided - ask for it
+        logger.info(`2FA required for user: ${email}`, { userId: centralUser.id });
+
+        return res.json({
+          success: true,
+          data: {
+            requires2FA: true,
+            userId: centralUser.id
+          },
+          nextStep: {
+            action: 'VERIFY_2FA',
+            instructions: 'Enter the 6-digit code from your authenticator app'
+          },
+          message: 'Two-factor authentication required'
+        });
+      }
+
+      // Code provided - verify it
+      const totpService = require('../services/totpService');
+      const ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || process.env.JWT_SECRET;
+
+      let isValidCode = false;
+
+      try {
+        const secret = totpService.decryptSecret(userWith2FA.totp_secret, ENCRYPTION_KEY);
+        isValidCode = totpService.verifyTOTP(secret, totpCode);
+
+        // If TOTP fails, try backup code
+        if (!isValidCode && userWith2FA.totp_backup_codes && userWith2FA.totp_backup_codes.length > 0) {
+          const backupIndex = totpService.verifyBackupCode(totpCode, userWith2FA.totp_backup_codes);
+          if (backupIndex !== -1) {
+            isValidCode = true;
+            // Remove used backup code
+            const remainingCodes = [...userWith2FA.totp_backup_codes];
+            remainingCodes.splice(backupIndex, 1);
+            await centralDb.query(
+              'UPDATE users SET totp_backup_codes = $1 WHERE id = $2',
+              [remainingCodes, centralUser.id]
+            );
+            logger.warn(`Backup code used for user ${centralUser.id}. ${remainingCodes.length} codes remaining.`);
+          }
+        }
+      } catch (err) {
+        logger.error('2FA verification error:', err);
+        isValidCode = false;
+      }
+
+      if (!isValidCode) {
+        logger.warn(`Invalid 2FA code for user: ${email}`, { userId: centralUser.id });
+        return res.status(401).json({
+          success: false,
+          error: {
+            message: 'Invalid 2FA code',
+            details: 'The authentication code is incorrect. Please try again.'
+          }
+        });
+      }
+
+      logger.info(`2FA verified for user: ${email}`, { userId: centralUser.id });
     }
 
     // ============================================================
