@@ -3,7 +3,7 @@
 # MedicalPro - Health Check Script
 # =============================================================================
 # Monitors API health, disk space, and memory usage
-# Sends alerts via email when thresholds are exceeded
+# Sends alerts via Slack and email when thresholds are exceeded
 #
 # Usage: /opt/scripts/health-check.sh
 # Cron:  */5 * * * * root /opt/scripts/health-check.sh
@@ -15,6 +15,7 @@ set -euo pipefail
 # Configuration
 # -----------------------------------------------------------------------------
 API_URL="http://localhost:3001/api/v1/health"
+FRONTEND_URL="http://localhost:3000"
 API_TIMEOUT=10
 
 # Thresholds
@@ -26,6 +27,7 @@ MEMORY_CRITICAL_PERCENT=95
 # Alert configuration
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@votreclinique.es}"
 ALERT_LOG="/var/log/medicalpro-alerts.log"
+SLACK_WEBHOOK_FILE="/root/.secrets/slack_webhook"
 
 # Cooldown: don't send same alert within this period (seconds)
 COOLDOWN_FILE="/tmp/medicalpro-alert-cooldown"
@@ -59,13 +61,16 @@ alert() {
     # Log alert
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$LEVEL] $SUBJECT: $MESSAGE" >> "$ALERT_LOG"
 
-    # Send email
+    # Send Slack notification
+    if [[ -f "$SLACK_WEBHOOK_FILE" ]]; then
+        send_slack_notification "$LEVEL" "$SUBJECT" "$MESSAGE"
+    fi
+
+    # Send email (fallback)
     if command -v mail &> /dev/null; then
         echo -e "Server: $(hostname)\nTime: $(date)\n\n$MESSAGE" | \
             mail -s "[$LEVEL] MedicalPro - $SUBJECT" "$ADMIN_EMAIL"
         log "Alert sent to $ADMIN_EMAIL: $SUBJECT"
-    else
-        log "WARNING: mail command not found, cannot send alert"
     fi
 
     # Update cooldown
@@ -75,6 +80,55 @@ alert() {
         mv "$COOLDOWN_FILE.tmp" "$COOLDOWN_FILE"
     fi
     echo "$ALERT_KEY=$(date +%s)" >> "$COOLDOWN_FILE"
+}
+
+send_slack_notification() {
+    local LEVEL="$1"
+    local TITLE="$2"
+    local MESSAGE="$3"
+
+    local WEBHOOK_URL
+    WEBHOOK_URL=$(cat "$SLACK_WEBHOOK_FILE")
+
+    # Set emoji and color
+    local EMOJI COLOR
+    case "$LEVEL" in
+        CRITICAL) EMOJI="🔴"; COLOR="#dc3545" ;;
+        WARNING)  EMOJI="🟡"; COLOR="#ffc107" ;;
+        *)        EMOJI="🔵"; COLOR="#17a2b8" ;;
+    esac
+
+    # Escape message for JSON
+    MESSAGE=$(echo "$MESSAGE" | sed 's/\\n/\n/g' | head -c 500)
+
+    local PAYLOAD
+    PAYLOAD=$(cat << EOF
+{
+    "attachments": [{
+        "color": "$COLOR",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "$EMOJI MedicalPro: $TITLE", "emoji": true}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": "*Server:*\n$(hostname)"},
+                    {"type": "mrkdwn", "text": "*Level:*\n$LEVEL"}
+                ]
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "$MESSAGE"}
+            }
+        ]
+    }]
+}
+EOF
+)
+
+    curl -s -o /dev/null -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK_URL" &
 }
 
 # -----------------------------------------------------------------------------
@@ -91,6 +145,24 @@ check_api() {
     else
         log "  ✗ API is DOWN (HTTP $HTTP_CODE)"
         alert "CRITICAL" "API Down" "MedicalPro API is not responding.\n\nURL: $API_URL\nHTTP Status: $HTTP_CODE\n\nPlease check PM2 and server logs:\n  pm2 status\n  pm2 logs medical-pro-backend" "api_down"
+        return 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Frontend Health Check
+# -----------------------------------------------------------------------------
+check_frontend() {
+    log "Checking Frontend health..."
+
+    HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time "$API_TIMEOUT" "$FRONTEND_URL" 2>/dev/null || echo "000")
+
+    if [[ "$HTTP_CODE" == "200" ]]; then
+        log "  ✓ Frontend is healthy (HTTP $HTTP_CODE)"
+        return 0
+    else
+        log "  ✗ Frontend is DOWN (HTTP $HTTP_CODE)"
+        alert "CRITICAL" "Frontend Down" "MedicalPro Frontend is not responding.\n\nURL: $FRONTEND_URL\nHTTP Status: $HTTP_CODE\n\nPlease check PM2:\n  pm2 status\n  pm2 logs medical-pro-frontend" "frontend_down"
         return 1
     fi
 }
@@ -211,6 +283,7 @@ log "=========================================="
 ERRORS=0
 
 check_api || ((ERRORS++))
+check_frontend || ((ERRORS++))
 check_disk || ((ERRORS++))
 check_memory || ((ERRORS++))
 check_pm2 || ((ERRORS++))

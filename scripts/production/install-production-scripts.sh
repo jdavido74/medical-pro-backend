@@ -28,7 +28,19 @@ log "Installing MedicalPro production scripts..."
 mkdir -p "$TARGET_DIR"
 
 # Copy scripts
-for script in backup-medicalpro.sh restore-medicalpro.sh health-check.sh setup-secrets.sh; do
+SCRIPTS=(
+    "backup-medicalpro.sh"
+    "restore-medicalpro.sh"
+    "health-check.sh"
+    "setup-secrets.sh"
+    "provision-clinic-db.sh"
+    "install-netdata.sh"
+    "setup-slack-alerts.sh"
+    "test-slack-alert.sh"
+    "lib-slack.sh"
+)
+
+for script in "${SCRIPTS[@]}"; do
     if [[ -f "$SCRIPT_DIR/$script" ]]; then
         cp "$SCRIPT_DIR/$script" "$TARGET_DIR/"
         chmod +x "$TARGET_DIR/$script"

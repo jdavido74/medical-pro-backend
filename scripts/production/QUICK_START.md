@@ -11,9 +11,13 @@ scripts/production/
 ├── install-production-scripts.sh # Installation des scripts dans /opt/scripts
 ├── backup-medicalpro.sh        # Sauvegarde quotidienne des bases
 ├── restore-medicalpro.sh       # Restauration depuis sauvegarde
-├── health-check.sh             # Vérification santé système
+├── health-check.sh             # Vérification santé système (API, Frontend, DB)
 ├── provision-clinic-db.sh      # Création base clinique
 ├── nginx-medicalpro.conf       # Configuration Nginx
+├── install-netdata.sh          # Installation monitoring Netdata
+├── setup-slack-alerts.sh       # Configuration alertes Slack
+├── test-slack-alert.sh         # Test des alertes Slack
+├── lib-slack.sh                # Bibliothèque fonctions Slack
 └── QUICK_START.md              # Ce fichier
 ```
 
@@ -199,6 +203,47 @@ pm2 flush
 # Nettoyer les anciennes sauvegardes (modifie RETENTION_DAYS dans le script)
 find /var/backups/medicalpro -name "*.dump.gpg" -mtime +7 -delete
 ```
+
+## Monitoring
+
+### Installation Netdata (dashboard temps réel)
+
+```bash
+# Installer Netdata
+sudo /opt/scripts/install-netdata.sh
+
+# Accéder au dashboard (via SSH tunnel)
+ssh -L 19999:localhost:19999 user@server
+# Puis ouvrir http://localhost:19999
+```
+
+### Configuration alertes Slack
+
+```bash
+# 1. Créer une app Slack: https://api.slack.com/apps
+# 2. Activer "Incoming Webhooks"
+# 3. Créer un webhook pour #alerts
+# 4. Configurer
+
+sudo /opt/scripts/setup-slack-alerts.sh
+
+# Tester
+sudo /opt/scripts/test-slack-alert.sh
+sudo /opt/scripts/test-slack-alert.sh critical
+sudo /opt/scripts/test-slack-alert.sh warning
+```
+
+### Monitoring automatique
+
+Le script `health-check.sh` vérifie toutes les 5 minutes :
+- ✅ API Backend (HTTP 200)
+- ✅ Frontend (HTTP 200)
+- ✅ PostgreSQL (connexion)
+- ✅ PM2 (processus online)
+- ✅ Disque (< 85% warning, < 95% critical)
+- ✅ Mémoire (< 90% warning, < 95% critical)
+
+Les alertes sont envoyées via Slack (si configuré) et email.
 
 ## Support
 

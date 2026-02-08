@@ -396,16 +396,59 @@ pm2 set pm2-logrotate:retain 7
 pm2 set pm2-logrotate:compress true
 ```
 
-### 7.2 Health checks
+### 7.2 Netdata (Dashboard temps réel)
 
-Les health checks sont configurés dans `/etc/cron.d/medicalpro` et s'exécutent toutes les 5 minutes.
+```bash
+# Installer Netdata
+sudo /opt/scripts/install-netdata.sh
+```
 
-Pour vérifier manuellement:
+Netdata fournit un dashboard web avec métriques en temps réel :
+- CPU, RAM, Disque, Réseau
+- PostgreSQL (connexions, requêtes)
+- Nginx (requêtes, connexions actives)
+- Processus Node.js/PM2
+
+**Accès au dashboard** (via SSH tunnel pour sécurité) :
+```bash
+ssh -L 19999:localhost:19999 user@server
+# Puis ouvrir http://localhost:19999
+```
+
+### 7.3 Alertes Slack
+
+```bash
+# Configurer Slack
+sudo /opt/scripts/setup-slack-alerts.sh
+
+# Tester les alertes
+sudo /opt/scripts/test-slack-alert.sh info
+sudo /opt/scripts/test-slack-alert.sh warning
+sudo /opt/scripts/test-slack-alert.sh critical
+```
+
+**Prérequis Slack** :
+1. Créer une app sur https://api.slack.com/apps
+2. Activer "Incoming Webhooks"
+3. Créer un webhook pour votre channel #alerts
+4. Copier l'URL du webhook
+
+### 7.4 Health checks automatiques
+
+Les health checks s'exécutent toutes les 5 minutes et vérifient :
+- ✅ API Backend (HTTP 200 sur /api/v1/health)
+- ✅ Frontend (HTTP 200)
+- ✅ PostgreSQL (connexion réussie)
+- ✅ PM2 (processus online)
+- ✅ Espace disque (warning 85%, critical 95%)
+- ✅ Mémoire RAM (warning 90%, critical 95%)
+
+Pour vérifier manuellement :
 ```bash
 /opt/scripts/health-check.sh
 ```
 
-### 7.3 Logs
+### 7.5 Logs
 
 ```bash
 # Logs PM2
@@ -416,6 +459,9 @@ tail -f /var/log/nginx/medicalpro_*.log
 
 # Logs sauvegardes
 tail -f /var/log/medicalpro-backup.log
+
+# Logs alertes
+tail -f /var/log/medicalpro-alerts.log
 ```
 
 ---
