@@ -53,8 +53,12 @@ const syncDatabase = async (force = false) => {
   }
 };
 
+// Get central database connection (alias for sequelize instance)
+const getCentralDbConnection = () => sequelize;
+
 module.exports = {
   sequelize,
   testConnection,
-  syncDatabase
+  syncDatabase,
+  getCentralDbConnection
 };
