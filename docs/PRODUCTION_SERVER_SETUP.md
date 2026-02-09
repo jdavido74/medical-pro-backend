@@ -126,6 +126,16 @@ ssh -p 2222 root@72.62.51.173
 - ✅ `central_003_user_clinic_memberships.sql`
 - ✅ `central_004_add_clinic_db_provisioned.sql`
 - ✅ `central_005_add_subdomain.sql`
+- ✅ `central_006_add_totp_fields.sql`
+
+### Colonnes Ajoutées Manuellement (companies)
+> Ces colonnes existent dans le modèle Sequelize mais n'étaient pas dans les migrations central_001-005.
+> Elles ont été ajoutées via ALTER TABLE le 9 février 2026.
+
+- `business_number VARCHAR(20)` — SIRET (FR) / NIF (ES)
+- `vat_number VARCHAR(20)` — Numéro de TVA
+- `settings JSONB DEFAULT '{}'` — Paramètres clinique
+- `setup_completed_at TIMESTAMP` — Date de fin de setup initial
 
 ### Architecture Multi-Tenant
 Chaque clinique dispose de sa propre base de données:
@@ -611,6 +621,31 @@ ALTER TABLE users ADD COLUMN totp_enabled_at TIMESTAMP;
 
 ---
 
+## Configuration CORS Backend
+
+**Fichier**: `/var/www/medical-pro-backend/.env` (sur le serveur prod)
+
+```
+CORS_ORIGIN=https://app.medimaestro.com,https://admin.medimaestro.com
+```
+
+> Le backend accepte les requêtes cross-origin depuis les deux domaines.
+> L'admin utilise des URLs relatives (`REACT_APP_API_URL=` vide) pour éviter le CORS via le proxy Nginx,
+> mais le CORS est configuré comme filet de sécurité.
+
+### Configuration Admin API
+
+**Fichier**: `/var/www/medical-pro-admin/.env.production`
+
+```
+REACT_APP_API_URL=
+```
+
+> **Important**: Les variables `REACT_APP_*` sont intégrées au build React.
+> Après modification, il faut rebuilder l'app : `npm run build`
+
+---
+
 ## Admin Portal (medical-pro-admin)
 
 ### Informations
@@ -647,6 +682,12 @@ ALTER TABLE users ADD COLUMN totp_enabled_at TIMESTAMP;
 | 2026-02-09 | Fix permissions deploy SSH: .ssh 700, authorized_keys owner deploy:deploy |
 | 2026-02-09 | Secrets GitHub configurés pour les 3 repos (backend, admin, frontend) |
 | 2026-02-09 | Déploiement admin portal: clone, build, config Nginx admin.medimaestro.com |
+| 2026-02-09 | Anti-crawling: robots.txt + X-Robots-Tag sur tous les server blocks Nginx |
+| 2026-02-09 | Fix CORS admin: REACT_APP_API_URL vide (URLs relatives) + CORS_ORIGIN multi-origines |
+| 2026-02-09 | Migration central_006 (TOTP) + colonnes manquantes companies (business_number, etc.) |
+| 2026-02-09 | Fix Sequelize raw queries: bind syntax `{ bind: [...] }` dans auth.js, totp.js, clinicSubdomain.js |
+| 2026-02-09 | Export getCentralDbConnection depuis config/database.js |
+| 2026-02-09 | Reset mot de passe super_admin (bcrypt hash régénéré) |
 
 ---
 
