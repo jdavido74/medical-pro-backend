@@ -24,6 +24,7 @@
 | URL | Description |
 |-----|-------------|
 | https://app.medimaestro.com | Application principale |
+| https://admin.medimaestro.com | Portail admin SaaS (super_admin) |
 | https://medimaestro.com | Redirige vers app.medimaestro.com |
 | https://[clinique].medimaestro.com | Sous-domaine par clinique (wildcard) |
 
@@ -183,9 +184,10 @@ Tous les secrets sont stockés dans `/root/.secrets/` avec permissions 600:
 ├─────────────────────────────────────────────────────────────┤
 │  HTTP (:80)           → Redirect to HTTPS                   │
 │  HTTPS (:443)                                               │
-│    ├── medimaestro.com      → Redirect to app.*             │
-│    ├── app.medimaestro.com  → Frontend + API                │
-│    └── *.medimaestro.com    → Frontend + API (wildcard)     │
+│    ├── medimaestro.com        → Redirect to app.*           │
+│    ├── app.medimaestro.com    → Frontend + API              │
+│    ├── admin.medimaestro.com  → Admin Portal (static)       │
+│    └── *.medimaestro.com      → Frontend + API (wildcard)   │
 ├─────────────────────────────────────────────────────────────┤
 │  Headers:                                                    │
 │    X-Clinic-Subdomain: <subdomain>  (passé au backend)      │
@@ -194,13 +196,13 @@ Tous les secrets sont stockés dans `/root/.secrets/` avec permissions 600:
 │    - API: 10 req/s (burst 20)                               │
 │    - Login: 1 req/s (burst 5)                               │
 └─────────────────────────────────────────────────────────────┘
-          │                              │
-          ▼                              ▼
-   ┌──────────────┐              ┌──────────────┐
-   │   Frontend   │              │   Backend    │
-   │  :3000 (PM2) │              │ :3001 (PM2)  │
-   │   1 instance │              │ 2 instances  │
-   └──────────────┘              └──────────────┘
+          │                    │                    │
+          ▼                    ▼                    ▼
+   ┌──────────────┐   ┌───────────────┐    ┌──────────────┐
+   │   Frontend   │   │ Admin Portal  │    │   Backend    │
+   │  :3000 (PM2) │   │ Static files  │    │ :3001 (PM2)  │
+   │   1 instance │   │ (Nginx only)  │    │ 2 instances  │
+   └──────────────┘   └───────────────┘    └──────────────┘
 ```
 
 ### Fichiers de Log
@@ -208,6 +210,8 @@ Tous les secrets sont stockés dans `/root/.secrets/` avec permissions 600:
 |-----|--------|
 | Access (app) | `/var/log/nginx/medimaestro_access.log` |
 | Error (app) | `/var/log/nginx/medimaestro_error.log` |
+| Access (admin) | `/var/log/nginx/medimaestro_admin_access.log` |
+| Error (admin) | `/var/log/nginx/medimaestro_admin_error.log` |
 | Access (clinics) | `/var/log/nginx/medimaestro_clinics_access.log` |
 | Error (clinics) | `/var/log/nginx/medimaestro_clinics_error.log` |
 
@@ -303,6 +307,13 @@ git pull origin master
 npm ci --legacy-peer-deps
 npm run build
 pm2 restart medical-pro-frontend
+
+# Admin Portal
+cd /var/www/medical-pro-admin
+git pull origin master
+npm ci
+npm run build
+# Pas de PM2, fichiers statiques servis par Nginx
 ```
 
 ### Gérer les sous-domaines cliniques
@@ -456,7 +467,8 @@ Accessible sur: `https://app.medimaestro.com:19999`
 │         ▼                       ▼                      ▼               │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                    GitHub Actions                                │   │
-│  │  - Workflow: deploy-production.yml                              │   │
+│  │  - Workflow: deploy-production.yml (backend/admin)               │   │
+│  │  - Workflow: build-and-deploy.yml (frontend: build + deploy)    │   │
 │  │  - Uses: appleboy/ssh-action                                    │   │
 │  │  - Secrets: PROD_HOST, PROD_SSH_KEY, PROD_SSH_PORT              │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
@@ -486,6 +498,9 @@ Accessible sur: `https://app.medimaestro.com:19999`
 | medical-pro-admin | `PROD_HOST` | 72.62.51.173 |
 | medical-pro-admin | `PROD_SSH_PORT` | 2222 |
 | medical-pro-admin | `PROD_SSH_KEY` | Clé privée ED25519 (deploy user) |
+| medical-pro (frontend) | `PROD_HOST` | 72.62.51.173 |
+| medical-pro (frontend) | `PROD_SSH_PORT` | 2222 |
+| medical-pro (frontend) | `PROD_SSH_KEY` | Clé privée ED25519 (deploy user) |
 
 ### Utilisateur Deploy
 
@@ -493,7 +508,7 @@ Accessible sur: `https://app.medimaestro.com:19999`
 |-----------|--------|
 | **Username** | deploy |
 | **Home** | /home/deploy |
-| **Clé SSH** | /home/deploy/.ssh/id_ed25520 |
+| **Clé SSH** | /home/deploy/.ssh/id_ed25520 (GitHub Actions deploy key) |
 | **Permissions sudo** | pm2 uniquement (NOPASSWD) |
 | **Groupes** | deploy, www-data |
 
@@ -605,8 +620,8 @@ ALTER TABLE users ADD COLUMN totp_enabled_at TIMESTAMP;
 | **URL** | https://admin.medimaestro.com |
 | **Emplacement** | /var/www/medical-pro-admin |
 | **Repository** | github.com/jdavido74/medical-pro-admin |
-| **Process PM2** | admin |
-| **Port** | 3002 (dev) / fichiers statiques (prod) |
+| **Serveur** | Nginx (fichiers statiques, pas de PM2) |
+| **Port dev** | 3002 |
 
 ### Fonctionnalités
 
@@ -628,6 +643,10 @@ ALTER TABLE users ADD COLUMN totp_enabled_at TIMESTAMP;
 | 2026-02-09 | Ajout 2FA (TOTP) pour admin portal |
 | 2026-02-09 | Configuration CI/CD GitHub Actions |
 | 2026-02-09 | Création utilisateur deploy avec permissions limitées |
+| 2026-02-09 | CI/CD frontend (medical-pro): build-and-deploy.yml avec appleboy/ssh-action |
+| 2026-02-09 | Fix permissions deploy SSH: .ssh 700, authorized_keys owner deploy:deploy |
+| 2026-02-09 | Secrets GitHub configurés pour les 3 repos (backend, admin, frontend) |
+| 2026-02-09 | Déploiement admin portal: clone, build, config Nginx admin.medimaestro.com |
 
 ---
 
