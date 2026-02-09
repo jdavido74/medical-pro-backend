@@ -668,6 +668,46 @@ REACT_APP_API_URL=
 
 ---
 
+## Provisionnement Base Clinique
+
+Lors de la création d'une clinique, `clinicProvisioningService.js` crée automatiquement une base PostgreSQL dédiée avec **33 tables** + 1 vue.
+
+### Fichiers Clés
+
+| Fichier | Rôle |
+|---------|------|
+| `src/services/clinicProvisioningService.js` | Provisionnement nouvelles cliniques (crée DB, migrations, données initiales) |
+| `scripts/run-clinic-migrations.js` | Applique des migrations nouvelles aux cliniques **existantes** |
+| `migrations/clinic_*.sql` | Fichiers de migration clinique (001 → 055) |
+
+### Liste des 33 Tables Créées
+
+| Catégorie | Tables |
+|-----------|--------|
+| **Core** | `medical_facilities`, `healthcare_providers`, `patients` |
+| **RDV** | `appointments`, `appointment_actions` |
+| **Dossier médical** | `medical_records`, `prescriptions`, `medical_documents` |
+| **Consentements** | `consents`, `consent_templates`, `consent_template_translations`, `consent_signing_requests`, `treatment_consent_templates` |
+| **Facturation** | `documents`, `document_items`, `document_sequences` |
+| **Catalogue** | `products_services`, `categories`, `product_categories`, `tags`, `product_tags`, `suppliers`, `product_suppliers` |
+| **Planning** | `machines`, `machine_treatments`, `practitioner_weekly_availability` |
+| **Organisation** | `teams`, `patient_care_team`, `clinic_roles`, `clinic_settings` |
+| **Système** | `audit_logs`, `scheduled_jobs`, `system_categories` |
+
+> **Vue** : `active_healthcare_providers` (filtre les praticiens soft-deleted)
+
+### Important — Synchronisation des Migrations
+
+Quand une **nouvelle migration `clinic_NNN_*.sql`** est ajoutée :
+
+1. **Ajouter au provisionnement** (`clinicProvisioningService.js` → liste `migrationFiles`) — pour les **nouvelles** cliniques
+2. **Ajouter à `run-clinic-migrations.js`** (liste `NEW_MIGRATIONS`) — pour les cliniques **existantes**
+3. **Vérifier la cohérence** avec la base de référence ozondenia en dev
+
+> Référence : Base ozondenia dev = `medicalpro_clinic_b2ccc366_d8d9_423c_ac79_cbbe9d550d18` (33 tables)
+
+---
+
 ## Historique des Modifications
 
 | Date | Modification |
@@ -688,6 +728,7 @@ REACT_APP_API_URL=
 | 2026-02-09 | Fix Sequelize raw queries: bind syntax `{ bind: [...] }` dans auth.js, totp.js, clinicSubdomain.js |
 | 2026-02-09 | Export getCentralDbConnection depuis config/database.js |
 | 2026-02-09 | Reset mot de passe super_admin (bcrypt hash régénéré) |
+| 2026-02-09 | Fix provisionnement clinique: ajout migrations 051-055 (system_categories, billing, contraintes) |
 
 ---
 
