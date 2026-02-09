@@ -32,10 +32,11 @@ const ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || process.env.JWT_SECRET
 router.get('/status', authMiddleware, async (req, res) => {
   try {
     const centralDb = getCentralDbConnection();
-    const [user] = await centralDb.query(
+    const [userRows] = await centralDb.query(
       'SELECT totp_enabled, totp_enabled_at FROM users WHERE id = $1',
-      [req.user.userId]
+      { bind: [req.user.userId] }
     );
+    const user = userRows[0];
 
     if (!user) {
       return res.status(404).json({
@@ -70,10 +71,11 @@ router.post('/setup', authMiddleware, requireSuperAdmin, async (req, res) => {
     const centralDb = getCentralDbConnection();
 
     // Check if 2FA is already enabled
-    const [user] = await centralDb.query(
+    const [userRows] = await centralDb.query(
       'SELECT email, totp_enabled FROM users WHERE id = $1',
-      [req.user.userId]
+      { bind: [req.user.userId] }
     );
+    const user = userRows[0];
 
     if (!user) {
       return res.status(404).json({
@@ -98,7 +100,7 @@ router.post('/setup', authMiddleware, requireSuperAdmin, async (req, res) => {
 
     await centralDb.query(
       'UPDATE users SET totp_secret = $1, updated_at = NOW() WHERE id = $2',
-      [encryptedSecret, req.user.userId]
+      { bind: [encryptedSecret, req.user.userId] }
     );
 
     logger.info(`2FA setup initiated for user ${req.user.userId}`);
@@ -138,10 +140,11 @@ router.post('/verify-setup', authMiddleware, requireSuperAdmin, async (req, res)
     const centralDb = getCentralDbConnection();
 
     // Get user's pending secret
-    const [user] = await centralDb.query(
+    const [userRows] = await centralDb.query(
       'SELECT totp_secret, totp_enabled FROM users WHERE id = $1',
-      [req.user.userId]
+      { bind: [req.user.userId] }
     );
+    const user = userRows[0];
 
     if (!user || !user.totp_secret) {
       return res.status(400).json({
@@ -181,7 +184,7 @@ router.post('/verify-setup', authMiddleware, requireSuperAdmin, async (req, res)
         totp_enabled_at = NOW(),
         updated_at = NOW()
        WHERE id = $2`,
-      [hashedBackupCodes, req.user.userId]
+      { bind: [hashedBackupCodes, req.user.userId] }
     );
 
     logger.info(`2FA enabled for user ${req.user.userId}`);
@@ -220,10 +223,11 @@ router.post('/validate', async (req, res) => {
 
     const centralDb = getCentralDbConnection();
 
-    const [user] = await centralDb.query(
+    const [userRows] = await centralDb.query(
       'SELECT totp_secret, totp_enabled, totp_backup_codes FROM users WHERE id = $1',
-      [userId]
+      { bind: [userId] }
     );
+    const user = userRows[0];
 
     if (!user || !user.totp_enabled || !user.totp_secret) {
       return res.status(400).json({
@@ -250,7 +254,7 @@ router.post('/validate', async (req, res) => {
 
         await centralDb.query(
           'UPDATE users SET totp_backup_codes = $1, updated_at = NOW() WHERE id = $2',
-          [remainingCodes, userId]
+          { bind: [remainingCodes, userId] }
         );
 
         logger.warn(`Backup code used for user ${userId}. ${remainingCodes.length} codes remaining.`);
@@ -303,10 +307,11 @@ router.post('/disable', authMiddleware, requireSuperAdmin, async (req, res) => {
     const bcrypt = require('bcryptjs');
 
     // Get user
-    const [user] = await centralDb.query(
+    const [userRows] = await centralDb.query(
       'SELECT password_hash, totp_secret, totp_enabled FROM users WHERE id = $1',
-      [req.user.userId]
+      { bind: [req.user.userId] }
     );
+    const user = userRows[0];
 
     if (!user || !user.totp_enabled) {
       return res.status(400).json({
@@ -344,7 +349,7 @@ router.post('/disable', authMiddleware, requireSuperAdmin, async (req, res) => {
         totp_enabled_at = NULL,
         updated_at = NOW()
        WHERE id = $1`,
-      [req.user.userId]
+      { bind: [req.user.userId] }
     );
 
     logger.info(`2FA disabled for user ${req.user.userId}`);
@@ -379,10 +384,11 @@ router.post('/regenerate-backup', authMiddleware, requireSuperAdmin, async (req,
 
     const centralDb = getCentralDbConnection();
 
-    const [user] = await centralDb.query(
+    const [userRows] = await centralDb.query(
       'SELECT totp_secret, totp_enabled FROM users WHERE id = $1',
-      [req.user.userId]
+      { bind: [req.user.userId] }
     );
+    const user = userRows[0];
 
     if (!user || !user.totp_enabled) {
       return res.status(400).json({
@@ -408,7 +414,7 @@ router.post('/regenerate-backup', authMiddleware, requireSuperAdmin, async (req,
 
     await centralDb.query(
       'UPDATE users SET totp_backup_codes = $1, updated_at = NOW() WHERE id = $2',
-      [hashedBackupCodes, req.user.userId]
+      { bind: [hashedBackupCodes, req.user.userId] }
     );
 
     logger.info(`Backup codes regenerated for user ${req.user.userId}`);

@@ -71,7 +71,7 @@ async function lookupClinicBySubdomain(subdomain) {
   try {
     const centralDb = getCentralDbConnection();
 
-    const [clinic] = await centralDb.query(`
+    const [clinicRows] = await centralDb.query(`
       SELECT
         id,
         name,
@@ -82,7 +82,8 @@ async function lookupClinicBySubdomain(subdomain) {
       FROM companies
       WHERE subdomain = $1 AND is_active = true
       LIMIT 1
-    `, [subdomain]);
+    `, { bind: [subdomain] });
+    const clinic = clinicRows[0];
 
     // Cache the result (even if null)
     clinicCache.set(subdomain, {

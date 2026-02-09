@@ -442,10 +442,11 @@ router.post('/login', async (req, res, next) => {
 
     // Check if user has 2FA enabled
     const centralDb = getCentralDbConnection();
-    const [userWith2FA] = await centralDb.query(
+    const [userWith2FARows] = await centralDb.query(
       'SELECT totp_enabled, totp_secret, totp_backup_codes FROM users WHERE id = $1',
-      [centralUser.id]
+      { bind: [centralUser.id] }
     );
+    const userWith2FA = userWith2FARows[0];
 
     if (userWith2FA && userWith2FA.totp_enabled) {
       // 2FA is enabled - check if code was provided
@@ -487,7 +488,7 @@ router.post('/login', async (req, res, next) => {
             remainingCodes.splice(backupIndex, 1);
             await centralDb.query(
               'UPDATE users SET totp_backup_codes = $1 WHERE id = $2',
-              [remainingCodes, centralUser.id]
+              { bind: [remainingCodes, centralUser.id] }
             );
             logger.warn(`Backup code used for user ${centralUser.id}. ${remainingCodes.length} codes remaining.`);
           }
