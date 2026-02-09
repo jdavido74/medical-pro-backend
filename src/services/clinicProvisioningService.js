@@ -173,6 +173,14 @@ class ClinicProvisioningService {
         'clinic_048_scheduled_jobs.sql',
         'clinic_049_treatment_consent_templates.sql',
         'clinic_050_appointment_workflow_fields.sql',
+        // System categories (dynamic consent types, specialties, etc.)
+        'clinic_051_system_categories.sql',
+        'clinic_052_seed_system_categories.sql',
+        'clinic_053_update_consent_type_constraint.sql',
+        // Drop overly strict provider-appointment unique constraint
+        'clinic_054_drop_provider_appointment_unique.sql',
+        // Billing: documents, document_items, document_sequences
+        'clinic_055_documents_billing.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];
@@ -484,7 +492,9 @@ EOF
       const requiredTables = [
         'healthcare_providers',
         'patients',
-        'appointments'
+        'appointments',
+        'documents',
+        'system_categories'
       ];
 
       const missingTables = [];
