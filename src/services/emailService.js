@@ -39,8 +39,7 @@ class EmailService {
       const transportConfig = {
         host: smtpHost,
         port: parseInt(smtpPort) || 587,
-        secure: (smtpPort == 465), // true for 465, false for other ports
-        ignoreSTARTTLS: true
+        secure: (smtpPort == 465) // true for 465, false for other ports (STARTTLS used on 587)
       };
 
       // Only add auth if credentials are provided (not needed for Mailhog)
@@ -53,7 +52,8 @@ class EmailService {
 
       this.transporter = nodemailer.createTransport(transportConfig);
       this.provider = 'smtp';
-      console.log('[EmailService] Config:', JSON.stringify(transportConfig, null, 2));
+      const safeConfig = { ...transportConfig, auth: transportConfig.auth ? { user: transportConfig.auth.user, pass: '***' } : undefined };
+      console.log('[EmailService] Config:', JSON.stringify(safeConfig, null, 2));
       logger.info(`✅ Email service initialized with SMTP provider: ${smtpHost}:${smtpPort}`);
 
       if (this.testModeEnabled) {
