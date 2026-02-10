@@ -1998,6 +1998,7 @@ router.post('/resend-invitation', async (req, res) => {
     const language = locale.split('-')[0].toLowerCase();
     const invitationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/${locale}/set-password?token=${invitationToken}`;
 
+    const logoUrl = await emailService.getClinicLogoUrl(clinicDb);
     await emailService.sendInvitationEmail({
       email: provider.email,
       firstName: provider.first_name,
@@ -2006,7 +2007,8 @@ router.post('/resend-invitation', async (req, res) => {
       role: provider.role,
       invitationUrl,
       expiresAt: invitationExpiresAt,
-      language
+      language,
+      logoUrl
     });
 
     res.json({

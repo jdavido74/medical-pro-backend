@@ -139,8 +139,9 @@ router.post('/', requirePermission(PERMISSIONS.CONSENTS_ASSIGN), async (req, res
     let emailResult = null;
     if (sentVia === 'email' && email) {
       try {
-        // Get clinic name from company (would need to add this lookup)
+        // Get clinic name and logo
         const clinicName = req.user.companyName || 'Clinique';
+        const logoUrl = await emailService.getClinicLogoUrl(req.clinicDb);
 
         emailResult = await emailService.sendConsentSigningRequest({
           email,
@@ -150,7 +151,8 @@ router.post('/', requirePermission(PERMISSIONS.CONSENTS_ASSIGN), async (req, res
           signingUrl,
           expiresAt: expiresAt.toISOString(),
           customMessage,
-          language: effectiveLanguage
+          language: effectiveLanguage,
+          logoUrl
         });
 
         logger.info('Consent signing email sent', {

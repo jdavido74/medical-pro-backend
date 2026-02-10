@@ -428,6 +428,7 @@ router.post('/', async (req, res) => {
 
       // Send invitation email
       try {
+        const logoUrl = await emailService.getClinicLogoUrl(req.clinicDb);
         await emailService.sendInvitationEmail({
           email: value.email.toLowerCase(),
           firstName: value.first_name,
@@ -436,7 +437,8 @@ router.post('/', async (req, res) => {
           role: value.role,
           invitationUrl: invitationLink,
           expiresAt: invitationExpiresAt,
-          language: language
+          language: language,
+          logoUrl
         });
         console.log('[healthcareProviders] Invitation email sent successfully to:', value.email);
       } catch (emailError) {

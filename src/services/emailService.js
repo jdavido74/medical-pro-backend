@@ -119,6 +119,46 @@ class EmailService {
   }
 
   /**
+   * Generate email header HTML with optional clinic logo
+   * @param {Object} params
+   * @param {String} params.title - Header title text
+   * @param {String} params.subtitle - Optional subtitle text
+   * @param {String} params.logoUrl - Optional full URL to clinic logo
+   * @param {String} params.gradientColors - CSS gradient colors (default: '#667eea, #764ba2')
+   */
+  getEmailHeader({ title, subtitle, logoUrl, gradientColors = '#667eea, #764ba2' }) {
+    const logoHtml = logoUrl
+      ? `<img src="${logoUrl}" alt="" style="max-height: 60px; max-width: 200px; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto;" />`
+      : '';
+    return `
+      <div class="header" style="background: linear-gradient(135deg, ${gradientColors}); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+        ${logoHtml}
+        <h1 style="margin: 0;">${title}</h1>
+        ${subtitle ? `<p style="margin: 10px 0 0 0; opacity: 0.9;">${subtitle}</p>` : ''}
+      </div>`;
+  }
+
+  /**
+   * Fetch clinic logo URL from medical_facilities table
+   * @param {Object} clinicDb - Sequelize clinic database connection
+   * @returns {String|null} Full logo URL or null
+   */
+  async getClinicLogoUrl(clinicDb) {
+    try {
+      const [rows] = await clinicDb.query(
+        'SELECT logo_url FROM medical_facilities LIMIT 1'
+      );
+      if (rows[0]?.logo_url) {
+        const baseUrl = process.env.BACKEND_URL || process.env.APP_URL || 'http://localhost:3001';
+        return `${baseUrl}${rows[0].logo_url}`;
+      }
+    } catch (e) {
+      // Silently ignore - logo is optional
+    }
+    return null;
+  }
+
+  /**
    * Send email verification link to user
    * @param {Object} params
    * @param {String} params.email - User email
@@ -127,8 +167,9 @@ class EmailService {
    * @param {String} params.verificationToken - JWT verification token
    * @param {String} params.verificationUrl - Full verification URL
    * @param {String} params.language - Language code (fr, en, es)
+   * @param {String} params.logoUrl - Optional full URL to clinic logo
    */
-  async sendVerificationEmail({ email, firstName, companyName, verificationToken, verificationUrl, language = 'fr' }) {
+  async sendVerificationEmail({ email, firstName, companyName, verificationToken, verificationUrl, language = 'fr', logoUrl = null }) {
     try {
       console.log('[EmailService] Attempting to send verification email:', {
         email,
@@ -145,7 +186,8 @@ class EmailService {
         firstName,
         companyName,
         verificationUrl,
-        verificationToken
+        verificationToken,
+        logoUrl
       });
 
       // Wrap with test info if in test mode
@@ -241,7 +283,14 @@ class EmailService {
   /**
    * Get HTML template for verification email (FRENCH)
    */
-  getVerificationEmailTemplateFR({ email, firstName, companyName, verificationUrl, verificationToken }) {
+  getVerificationEmailTemplateFR({ email, firstName, companyName, verificationUrl, verificationToken, logoUrl }) {
+    const header = this.getEmailHeader({
+      title: 'Bienvenue!',
+      subtitle: `Vérifiez votre adresse email pour accéder à ${companyName}`,
+      logoUrl,
+      gradientColors: '#667eea, #764ba2'
+    });
+
     return `
       <!DOCTYPE html>
       <html>
@@ -258,13 +307,6 @@ class EmailService {
               margin: 0 auto;
               padding: 20px;
               background-color: #f9f9f9;
-            }
-            .header {
-              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-              color: white;
-              padding: 30px;
-              text-align: center;
-              border-radius: 8px 8px 0 0;
             }
             .content {
               background-color: white;
@@ -305,10 +347,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1>Bienvenue! 👋</h1>
-              <p>Vérifiez votre adresse email pour accéder à ${companyName}</p>
-            </div>
+            ${header}
 
             <div class="content">
               <h2>Bonjour ${firstName || 'Utilisateur'},</h2>
@@ -352,7 +391,14 @@ class EmailService {
   /**
    * Get HTML template for verification email (SPANISH)
    */
-  getVerificationEmailTemplateES({ email, firstName, companyName, verificationUrl, verificationToken }) {
+  getVerificationEmailTemplateES({ email, firstName, companyName, verificationUrl, verificationToken, logoUrl }) {
+    const header = this.getEmailHeader({
+      title: '¡Bienvenido!',
+      subtitle: `Verifica tu dirección de correo para acceder a ${companyName}`,
+      logoUrl,
+      gradientColors: '#667eea, #764ba2'
+    });
+
     return `
       <!DOCTYPE html>
       <html>
@@ -369,13 +415,6 @@ class EmailService {
               margin: 0 auto;
               padding: 20px;
               background-color: #f9f9f9;
-            }
-            .header {
-              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-              color: white;
-              padding: 30px;
-              text-align: center;
-              border-radius: 8px 8px 0 0;
             }
             .content {
               background-color: white;
@@ -416,10 +455,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1>¡Bienvenido! 👋</h1>
-              <p>Verifica tu dirección de correo para acceder a ${companyName}</p>
-            </div>
+            ${header}
 
             <div class="content">
               <h2>Hola ${firstName || 'Usuario'},</h2>
@@ -463,7 +499,14 @@ class EmailService {
   /**
    * Get HTML template for verification email (ENGLISH)
    */
-  getVerificationEmailTemplateEN({ email, firstName, companyName, verificationUrl, verificationToken }) {
+  getVerificationEmailTemplateEN({ email, firstName, companyName, verificationUrl, verificationToken, logoUrl }) {
+    const header = this.getEmailHeader({
+      title: 'Welcome!',
+      subtitle: `Verify your email address to access ${companyName}`,
+      logoUrl,
+      gradientColors: '#667eea, #764ba2'
+    });
+
     return `
       <!DOCTYPE html>
       <html>
@@ -480,13 +523,6 @@ class EmailService {
               margin: 0 auto;
               padding: 20px;
               background-color: #f9f9f9;
-            }
-            .header {
-              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-              color: white;
-              padding: 30px;
-              text-align: center;
-              border-radius: 8px 8px 0 0;
             }
             .content {
               background-color: white;
@@ -527,10 +563,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1>Welcome!</h1>
-              <p>Verify your email address to access ${companyName}</p>
-            </div>
+            ${header}
 
             <div class="content">
               <h2>Hello ${firstName || 'User'},</h2>
@@ -579,13 +612,13 @@ class EmailService {
    * @param {String} params.companyName - Company name
    * @param {String} params.language - Language code (fr, en, es)
    */
-  async sendVerificationConfirmed({ email, firstName, companyName, language = 'fr' }) {
+  async sendVerificationConfirmed({ email, firstName, companyName, language = 'fr', logoUrl = null }) {
     try {
       // Get recipient email (test mode redirects to TEST_EMAIL_ADDRESS)
       const recipientEmail = this.getRecipientEmail(email);
 
       // Get email template based on language
-      let htmlContent = this.getConfirmationEmailTemplate(language, { firstName, companyName });
+      let htmlContent = this.getConfirmationEmailTemplate(language, { firstName, companyName, logoUrl });
 
       // Wrap with test info if in test mode
       if (this.testModeEnabled) {
@@ -645,7 +678,13 @@ class EmailService {
   /**
    * Get HTML template for confirmation email (FRENCH)
    */
-  getConfirmationEmailTemplateFR({ firstName, companyName }) {
+  getConfirmationEmailTemplateFR({ firstName, companyName, logoUrl }) {
+    const header = this.getEmailHeader({
+      title: 'Adresse email confirmée!',
+      logoUrl,
+      gradientColors: '#16a34a, #15803d'
+    });
+
     return `
       <!DOCTYPE html>
       <html>
@@ -654,7 +693,6 @@ class EmailService {
           <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
-            .header { background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
             .success-badge { text-align: center; font-size: 48px; margin: 20px 0; }
             .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
@@ -662,9 +700,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1>Adresse email confirmée! ✅</h1>
-            </div>
+            ${header}
 
             <div class="content">
               <div class="success-badge">✨</div>
@@ -699,7 +735,13 @@ class EmailService {
   /**
    * Get HTML template for confirmation email (SPANISH)
    */
-  getConfirmationEmailTemplateES({ firstName, companyName }) {
+  getConfirmationEmailTemplateES({ firstName, companyName, logoUrl }) {
+    const header = this.getEmailHeader({
+      title: '¡Dirección de correo confirmada!',
+      logoUrl,
+      gradientColors: '#16a34a, #15803d'
+    });
+
     return `
       <!DOCTYPE html>
       <html>
@@ -708,7 +750,6 @@ class EmailService {
           <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
-            .header { background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
             .success-badge { text-align: center; font-size: 48px; margin: 20px 0; }
             .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
@@ -716,9 +757,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1>¡Dirección de correo confirmada! ✅</h1>
-            </div>
+            ${header}
 
             <div class="content">
               <div class="success-badge">✨</div>
@@ -753,7 +792,13 @@ class EmailService {
   /**
    * Get HTML template for confirmation email (ENGLISH)
    */
-  getConfirmationEmailTemplateEN({ firstName, companyName }) {
+  getConfirmationEmailTemplateEN({ firstName, companyName, logoUrl }) {
+    const header = this.getEmailHeader({
+      title: 'Email address confirmed!',
+      logoUrl,
+      gradientColors: '#16a34a, #15803d'
+    });
+
     return `
       <!DOCTYPE html>
       <html>
@@ -762,7 +807,6 @@ class EmailService {
           <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
-            .header { background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
             .success-badge { text-align: center; font-size: 48px; margin: 20px 0; }
             .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
@@ -770,9 +814,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1>Email address confirmed!</h1>
-            </div>
+            ${header}
 
             <div class="content">
               <div class="success-badge">✨</div>
@@ -824,7 +866,8 @@ class EmailService {
     signingUrl,
     expiresAt,
     customMessage,
-    language = 'fr'
+    language = 'fr',
+    logoUrl = null
   }) {
     try {
       const recipientEmail = this.getRecipientEmail(email);
@@ -836,7 +879,8 @@ class EmailService {
         consentTitle,
         signingUrl,
         expiresAt,
-        customMessage
+        customMessage,
+        logoUrl
       });
 
       if (this.testModeEnabled) {
@@ -895,13 +939,20 @@ class EmailService {
   /**
    * Consent signing email template - FRENCH
    */
-  getConsentSigningEmailTemplateFR({ email, patientName, clinicName, consentTitle, signingUrl, expiresAt, customMessage }) {
+  getConsentSigningEmailTemplateFR({ email, patientName, clinicName, consentTitle, signingUrl, expiresAt, customMessage, logoUrl }) {
     const expiresDate = new Date(expiresAt).toLocaleDateString('fr-FR', {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
+    });
+
+    const header = this.getEmailHeader({
+      title: 'Document à signer',
+      subtitle: clinicName,
+      logoUrl,
+      gradientColors: '#3b82f6, #1d4ed8'
     });
 
     return `
@@ -913,7 +964,6 @@ class EmailService {
           <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
-            .header { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
             .button { display: inline-block; background-color: #3b82f6; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
             .document-box { background-color: #f0f7ff; border: 1px solid #3b82f6; border-radius: 8px; padding: 20px; margin: 20px 0; }
@@ -924,10 +974,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1 style="margin: 0;">📝 Document à signer</h1>
-              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
-            </div>
+            ${header}
 
             <div class="content">
               <h2>Bonjour ${patientName},</h2>
@@ -984,13 +1031,20 @@ class EmailService {
   /**
    * Consent signing email template - ENGLISH
    */
-  getConsentSigningEmailTemplateEN({ email, patientName, clinicName, consentTitle, signingUrl, expiresAt, customMessage }) {
+  getConsentSigningEmailTemplateEN({ email, patientName, clinicName, consentTitle, signingUrl, expiresAt, customMessage, logoUrl }) {
     const expiresDate = new Date(expiresAt).toLocaleDateString('en-US', {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
+    });
+
+    const header = this.getEmailHeader({
+      title: 'Document to Sign',
+      subtitle: clinicName,
+      logoUrl,
+      gradientColors: '#3b82f6, #1d4ed8'
     });
 
     return `
@@ -1002,7 +1056,6 @@ class EmailService {
           <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
-            .header { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
             .button { display: inline-block; background-color: #3b82f6; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
             .document-box { background-color: #f0f7ff; border: 1px solid #3b82f6; border-radius: 8px; padding: 20px; margin: 20px 0; }
@@ -1013,10 +1066,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1 style="margin: 0;">📝 Document to Sign</h1>
-              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
-            </div>
+            ${header}
 
             <div class="content">
               <h2>Hello ${patientName},</h2>
@@ -1073,13 +1123,20 @@ class EmailService {
   /**
    * Consent signing email template - SPANISH
    */
-  getConsentSigningEmailTemplateES({ email, patientName, clinicName, consentTitle, signingUrl, expiresAt, customMessage }) {
+  getConsentSigningEmailTemplateES({ email, patientName, clinicName, consentTitle, signingUrl, expiresAt, customMessage, logoUrl }) {
     const expiresDate = new Date(expiresAt).toLocaleDateString('es-ES', {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
+    });
+
+    const header = this.getEmailHeader({
+      title: 'Documento para Firmar',
+      subtitle: clinicName,
+      logoUrl,
+      gradientColors: '#3b82f6, #1d4ed8'
     });
 
     return `
@@ -1091,7 +1148,6 @@ class EmailService {
           <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
-            .header { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
             .button { display: inline-block; background-color: #3b82f6; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
             .document-box { background-color: #f0f7ff; border: 1px solid #3b82f6; border-radius: 8px; padding: 20px; margin: 20px 0; }
@@ -1102,10 +1158,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1 style="margin: 0;">📝 Documento para Firmar</h1>
-              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
-            </div>
+            ${header}
 
             <div class="content">
               <h2>Hola ${patientName},</h2>
@@ -1179,7 +1232,8 @@ class EmailService {
     role,
     invitationUrl,
     expiresAt,
-    language = 'fr'
+    language = 'fr',
+    logoUrl = null
   }) {
     try {
       console.log('[EmailService] Sending invitation email:', {
@@ -1199,7 +1253,8 @@ class EmailService {
         clinicName,
         role,
         invitationUrl,
-        expiresAt
+        expiresAt,
+        logoUrl
       });
 
       if (this.testModeEnabled) {
@@ -1272,7 +1327,7 @@ class EmailService {
   /**
    * Invitation email template - FRENCH
    */
-  getInvitationEmailTemplateFR({ email, firstName, lastName, clinicName, role, invitationUrl, expiresAt }) {
+  getInvitationEmailTemplateFR({ email, firstName, lastName, clinicName, role, invitationUrl, expiresAt, logoUrl }) {
     const expiresDate = new Date(expiresAt).toLocaleDateString('fr-FR', {
       day: 'numeric',
       month: 'long',
@@ -1289,6 +1344,13 @@ class EmailService {
       readonly: 'Consultant'
     };
 
+    const header = this.getEmailHeader({
+      title: "Bienvenue dans l'équipe !",
+      subtitle: clinicName,
+      logoUrl,
+      gradientColors: '#10b981, #059669'
+    });
+
     return `
       <!DOCTYPE html>
       <html>
@@ -1298,7 +1360,6 @@ class EmailService {
           <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
-            .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
             .button { display: inline-block; background-color: #10b981; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
             .info-box { background-color: #f0fdf4; border: 1px solid #10b981; border-radius: 8px; padding: 20px; margin: 20px 0; }
@@ -1308,10 +1369,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1 style="margin: 0;">🎉 Bienvenue dans l'équipe !</h1>
-              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
-            </div>
+            ${header}
 
             <div class="content">
               <h2>Bonjour ${firstName} ${lastName},</h2>
@@ -1365,7 +1423,7 @@ class EmailService {
   /**
    * Invitation email template - ENGLISH
    */
-  getInvitationEmailTemplateEN({ email, firstName, lastName, clinicName, role, invitationUrl, expiresAt }) {
+  getInvitationEmailTemplateEN({ email, firstName, lastName, clinicName, role, invitationUrl, expiresAt, logoUrl }) {
     const expiresDate = new Date(expiresAt).toLocaleDateString('en-US', {
       day: 'numeric',
       month: 'long',
@@ -1382,6 +1440,13 @@ class EmailService {
       readonly: 'Read-only User'
     };
 
+    const header = this.getEmailHeader({
+      title: 'Welcome to the Team!',
+      subtitle: clinicName,
+      logoUrl,
+      gradientColors: '#10b981, #059669'
+    });
+
     return `
       <!DOCTYPE html>
       <html>
@@ -1391,7 +1456,6 @@ class EmailService {
           <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
-            .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
             .button { display: inline-block; background-color: #10b981; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
             .info-box { background-color: #f0fdf4; border: 1px solid #10b981; border-radius: 8px; padding: 20px; margin: 20px 0; }
@@ -1401,10 +1465,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1 style="margin: 0;">🎉 Welcome to the Team!</h1>
-              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
-            </div>
+            ${header}
 
             <div class="content">
               <h2>Hello ${firstName} ${lastName},</h2>
@@ -1458,7 +1519,7 @@ class EmailService {
   /**
    * Invitation email template - SPANISH
    */
-  getInvitationEmailTemplateES({ email, firstName, lastName, clinicName, role, invitationUrl, expiresAt }) {
+  getInvitationEmailTemplateES({ email, firstName, lastName, clinicName, role, invitationUrl, expiresAt, logoUrl }) {
     const expiresDate = new Date(expiresAt).toLocaleDateString('es-ES', {
       day: 'numeric',
       month: 'long',
@@ -1475,6 +1536,13 @@ class EmailService {
       readonly: 'Usuario de solo lectura'
     };
 
+    const header = this.getEmailHeader({
+      title: '¡Bienvenido al Equipo!',
+      subtitle: clinicName,
+      logoUrl,
+      gradientColors: '#10b981, #059669'
+    });
+
     return `
       <!DOCTYPE html>
       <html>
@@ -1484,7 +1552,6 @@ class EmailService {
           <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
-            .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
             .button { display: inline-block; background-color: #10b981; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
             .info-box { background-color: #f0fdf4; border: 1px solid #10b981; border-radius: 8px; padding: 20px; margin: 20px 0; }
@@ -1494,10 +1561,7 @@ class EmailService {
         </head>
         <body>
           <div class="container">
-            <div class="header">
-              <h1 style="margin: 0;">🎉 ¡Bienvenido al Equipo!</h1>
-              <p style="margin: 10px 0 0 0; opacity: 0.9;">${clinicName}</p>
-            </div>
+            ${header}
 
             <div class="content">
               <h2>Hola ${firstName} ${lastName},</h2>
