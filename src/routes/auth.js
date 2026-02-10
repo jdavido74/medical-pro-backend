@@ -259,7 +259,7 @@ router.post('/register', async (req, res, next) => {
       companyName: company.name,
       verificationToken,
       verificationUrl,
-      region: company.country || 'FR'
+      language: (company.locale || 'fr-FR').split('-')[0].toLowerCase()
     }).then(() => {
       logger.info(`✅ Verification email sent to: ${user.email}`);
     }).catch((emailError) => {
@@ -1307,7 +1307,7 @@ router.post('/verify-email/:token', async (req, res, next) => {
         email: user.email,
         firstName: user.first_name || 'User',
         companyName: company?.name || 'MedicalPro',
-        region: company?.country || 'FR'
+        language: (company?.locale || 'fr-FR').split('-')[0].toLowerCase()
       });
     } catch (emailError) {
       logger.warn(`⚠️ Failed to send confirmation email: ${emailError.message}`);
@@ -1401,7 +1401,7 @@ router.post('/resend-verification-email', async (req, res, next) => {
         companyName: user.company.name,
         verificationToken,
         verificationUrl,
-        region: user.company.country || 'FR'
+        language: (user.company.locale || 'fr-FR').split('-')[0].toLowerCase()
       });
     } catch (emailError) {
       logger.warn(`⚠️ Failed to send resend verification email:`, emailError.message);

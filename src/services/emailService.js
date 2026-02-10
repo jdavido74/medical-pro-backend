@@ -126,9 +126,9 @@ class EmailService {
    * @param {String} params.companyName - Company name
    * @param {String} params.verificationToken - JWT verification token
    * @param {String} params.verificationUrl - Full verification URL
-   * @param {String} params.region - User region (FR, ES, etc.)
+   * @param {String} params.language - Language code (fr, en, es)
    */
-  async sendVerificationEmail({ email, firstName, companyName, verificationToken, verificationUrl, region = 'FR' }) {
+  async sendVerificationEmail({ email, firstName, companyName, verificationToken, verificationUrl, language = 'fr' }) {
     try {
       console.log('[EmailService] Attempting to send verification email:', {
         email,
@@ -139,8 +139,8 @@ class EmailService {
       // Get recipient email (test mode redirects to TEST_EMAIL_ADDRESS)
       const recipientEmail = this.getRecipientEmail(email);
 
-      // Get email template based on region
-      let htmlContent = this.getVerificationEmailTemplate(region.toUpperCase(), {
+      // Get email template based on language
+      let htmlContent = this.getVerificationEmailTemplate(language, {
         email,
         firstName,
         companyName,
@@ -153,10 +153,16 @@ class EmailService {
         htmlContent = this.wrapEmailContentWithTestInfo(htmlContent, email);
       }
 
+      const subjects = {
+        fr: `Vérifiez votre adresse email - ${companyName}`,
+        en: `Verify your email address - ${companyName}`,
+        es: `Verifique su dirección de correo - ${companyName}`
+      };
+
       const mailOptions = {
         from: process.env.FROM_EMAIL || 'noreply@medicalpro.com',
         to: recipientEmail,
-        subject: this.getEmailSubject(`Vérifiez votre adresse email - ${companyName}`, 'VERIFICATION'),
+        subject: this.getEmailSubject(subjects[language] || subjects.fr, 'VERIFICATION'),
         html: htmlContent
       };
 
@@ -217,19 +223,19 @@ class EmailService {
   }
 
   /**
-   * Get HTML template for verification email based on region
-   * @param {String} region - User region (FR, ES)
+   * Get HTML template for verification email based on language
+   * @param {String} language - Language code (fr, en, es)
    * @param {Object} params - Template parameters
    */
-  getVerificationEmailTemplate(region = 'FR', { email, firstName, companyName, verificationUrl, verificationToken }) {
-    region = region.toUpperCase();
+  getVerificationEmailTemplate(language, params) {
+    const templates = {
+      fr: this.getVerificationEmailTemplateFR,
+      en: this.getVerificationEmailTemplateEN,
+      es: this.getVerificationEmailTemplateES
+    };
 
-    if (region === 'ES') {
-      return this.getVerificationEmailTemplateES({ email, firstName, companyName, verificationUrl, verificationToken });
-    }
-
-    // Default to French
-    return this.getVerificationEmailTemplateFR({ email, firstName, companyName, verificationUrl, verificationToken });
+    const templateFn = templates[language] || templates.fr;
+    return templateFn.call(this, params);
   }
 
   /**
@@ -455,30 +461,147 @@ class EmailService {
   }
 
   /**
+   * Get HTML template for verification email (ENGLISH)
+   */
+  getVerificationEmailTemplateEN({ email, firstName, companyName, verificationUrl, verificationToken }) {
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            body {
+              font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+              line-height: 1.6;
+              color: #333;
+            }
+            .container {
+              max-width: 600px;
+              margin: 0 auto;
+              padding: 20px;
+              background-color: #f9f9f9;
+            }
+            .header {
+              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+              color: white;
+              padding: 30px;
+              text-align: center;
+              border-radius: 8px 8px 0 0;
+            }
+            .content {
+              background-color: white;
+              padding: 30px;
+              border-radius: 0 0 8px 8px;
+            }
+            .button {
+              display: inline-block;
+              background-color: #667eea;
+              color: white !important;
+              padding: 12px 30px;
+              border-radius: 4px;
+              text-decoration: none;
+              font-weight: bold;
+              margin: 20px 0;
+            }
+            .button:hover {
+              background-color: #764ba2;
+            }
+            .token-box {
+              background-color: #f0f0f0;
+              padding: 15px;
+              border-radius: 4px;
+              font-family: monospace;
+              word-break: break-all;
+              font-size: 12px;
+              margin: 15px 0;
+            }
+            .footer {
+              color: #999;
+              font-size: 12px;
+              text-align: center;
+              margin-top: 30px;
+              padding-top: 20px;
+              border-top: 1px solid #eee;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>Welcome!</h1>
+              <p>Verify your email address to access ${companyName}</p>
+            </div>
+
+            <div class="content">
+              <h2>Hello ${firstName || 'User'},</h2>
+
+              <p>Thank you for registering with <strong>${companyName}</strong>.</p>
+
+              <p>To access your account and start using our platform, please verify your email address by clicking the button below:</p>
+
+              <center>
+                <a href="${verificationUrl}" class="button">Verify my email address</a>
+              </center>
+
+              <p style="color: #999; font-size: 14px;">
+                If the button above doesn't work, copy and paste this link into your browser:
+              </p>
+
+              <div class="token-box">${verificationUrl}</div>
+
+              <h3>Security details:</h3>
+              <ul>
+                <li>This verification link expires in 24 hours</li>
+                <li>Please confirm your email address before logging in</li>
+                <li>You will receive a confirmation email once verified</li>
+              </ul>
+
+              <p style="color: #999;">
+                <strong>Note:</strong> If you did not create this account, please ignore this email.
+              </p>
+            </div>
+
+            <div class="footer">
+              <p>&copy; 2025 MedicalPro. All rights reserved.</p>
+              <p>This email was sent to ${email}</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+  }
+
+  /**
    * Send email confirmation (after successful verification)
    * @param {Object} params
    * @param {String} params.email - User email
    * @param {String} params.firstName - User first name
    * @param {String} params.companyName - Company name
-   * @param {String} params.region - User region (FR, ES, etc.)
+   * @param {String} params.language - Language code (fr, en, es)
    */
-  async sendVerificationConfirmed({ email, firstName, companyName, region = 'FR' }) {
+  async sendVerificationConfirmed({ email, firstName, companyName, language = 'fr' }) {
     try {
       // Get recipient email (test mode redirects to TEST_EMAIL_ADDRESS)
       const recipientEmail = this.getRecipientEmail(email);
 
-      // Get email template based on region
-      let htmlContent = this.getConfirmationEmailTemplate(region.toUpperCase(), { firstName, companyName });
+      // Get email template based on language
+      let htmlContent = this.getConfirmationEmailTemplate(language, { firstName, companyName });
 
       // Wrap with test info if in test mode
       if (this.testModeEnabled) {
         htmlContent = this.wrapEmailContentWithTestInfo(htmlContent, email);
       }
 
+      const subjects = {
+        fr: `Adresse email confirmée - ${companyName}`,
+        en: `Email address confirmed - ${companyName}`,
+        es: `Dirección de correo confirmada - ${companyName}`
+      };
+
       const mailOptions = {
         from: process.env.FROM_EMAIL || 'noreply@medicalpro.com',
         to: recipientEmail,
-        subject: this.getEmailSubject(`Adresse email confirmée - ${companyName}`, 'CONFIRMATION'),
+        subject: this.getEmailSubject(subjects[language] || subjects.fr, 'CONFIRMATION'),
         html: htmlContent
       };
 
@@ -504,19 +627,19 @@ class EmailService {
   }
 
   /**
-   * Get HTML template for confirmation email based on region
-   * @param {String} region - User region (FR, ES)
+   * Get HTML template for confirmation email based on language
+   * @param {String} language - Language code (fr, en, es)
    * @param {Object} params - Template parameters
    */
-  getConfirmationEmailTemplate(region = 'FR', { firstName, companyName }) {
-    region = region.toUpperCase();
+  getConfirmationEmailTemplate(language, params) {
+    const templates = {
+      fr: this.getConfirmationEmailTemplateFR,
+      en: this.getConfirmationEmailTemplateEN,
+      es: this.getConfirmationEmailTemplateES
+    };
 
-    if (region === 'ES') {
-      return this.getConfirmationEmailTemplateES({ firstName, companyName });
-    }
-
-    // Default to French
-    return this.getConfirmationEmailTemplateFR({ firstName, companyName });
+    const templateFn = templates[language] || templates.fr;
+    return templateFn.call(this, params);
   }
 
   /**
@@ -620,6 +743,60 @@ class EmailService {
 
             <div class="footer">
               <p>© 2025 MedicalPro. Todos los derechos reservados.</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+  }
+
+  /**
+   * Get HTML template for confirmation email (ENGLISH)
+   */
+  getConfirmationEmailTemplateEN({ firstName, companyName }) {
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
+            .header { background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0; }
+            .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
+            .success-badge { text-align: center; font-size: 48px; margin: 20px 0; }
+            .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>Email address confirmed!</h1>
+            </div>
+
+            <div class="content">
+              <div class="success-badge">✨</div>
+
+              <h2>Welcome ${firstName || 'User'}!</h2>
+
+              <p>Your email address has been successfully verified.</p>
+
+              <p>You can now access ${companyName} with your login credentials.</p>
+
+              <p><strong>Next steps:</strong></p>
+              <ul>
+                <li>Log in with your credentials</li>
+                <li>Complete your profile if needed</li>
+                <li>Start using the platform</li>
+              </ul>
+
+              <p style="margin-top: 30px; color: #999;">
+                If you have any questions, feel free to contact us.
+              </p>
+            </div>
+
+            <div class="footer">
+              <p>&copy; 2025 MedicalPro. All rights reserved.</p>
             </div>
           </div>
         </body>

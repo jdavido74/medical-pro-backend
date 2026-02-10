@@ -30,7 +30,7 @@ const createSigningRequestSchema = Joi.object({
     otherwise: Joi.optional()
   }),
   recipientPhone: Joi.string().optional(),
-  languageCode: Joi.string().valid('fr', 'en', 'es', 'de', 'it', 'pt').default('fr'),
+  languageCode: Joi.string().valid('fr', 'en', 'es', 'de', 'it', 'pt').optional(),
   customMessage: Joi.string().max(1000).optional(),
   expiresInHours: Joi.number().min(1).max(168).default(48) // 1 hour to 7 days
 });
@@ -103,6 +103,9 @@ router.post('/', requirePermission(PERMISSIONS.CONSENTS_ASSIGN), async (req, res
       });
     }
 
+    // Resolve language: explicit param > patient preference > default
+    const effectiveLanguage = languageCode || patient.preferred_language || 'fr';
+
     // Calculate expiration
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + expiresInHours);
@@ -119,7 +122,7 @@ router.post('/', requirePermission(PERMISSIONS.CONSENTS_ASSIGN), async (req, res
       sent_via: sentVia,
       recipient_email: email,
       recipient_phone: recipientPhone || patient.phone,
-      language_code: languageCode,
+      language_code: effectiveLanguage,
       custom_message: customMessage,
       ip_address_sent: req.ip,
       created_by: req.user.userId
@@ -147,7 +150,7 @@ router.post('/', requirePermission(PERMISSIONS.CONSENTS_ASSIGN), async (req, res
           signingUrl,
           expiresAt: expiresAt.toISOString(),
           customMessage,
-          language: languageCode
+          language: effectiveLanguage
         });
 
         logger.info('Consent signing email sent', {
