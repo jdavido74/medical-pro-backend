@@ -228,11 +228,16 @@ Un praticien peut etre dans une team "Cardiologie" mais n'avoir acces qu'aux pat
 
 ---
 
-## Etat actuel du frontend
+## Etat actuel
 
+### Frontend
 Il n'existe **pas encore d'interface frontend** pour gerer l'equipe de soins d'un patient. L'onglet "Acces" dans le detail patient affiche l'historique d'acces mais ne permet pas d'ajouter/retirer des praticiens.
 
-Pour permettre la gestion des equipes de soins dans l'interface :
+### Permission physician
+Le role `physician` a temporairement la permission `PATIENTS_VIEW_ALL` pour permettre aux medecins de voir tous les patients de la clinique. Ce sera remplace par le filtrage care team quand l'UI sera prete.
+
+### TODO — UI Equipe de soins
 1. Ajouter un onglet "Equipe de soins" dans `PatientDetailModal`
 2. Lister les praticiens avec leur role et niveau d'acces
 3. Permettre l'ajout/suppression via les endpoints `/care-team/grant` et `/care-team/revoke`
+4. Retirer `PATIENTS_VIEW_ALL` du role `physician` une fois l'UI fonctionnelle

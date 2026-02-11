@@ -225,8 +225,10 @@ const ROLE_PERMISSIONS = {
   ],
 
   physician: [
-    // Médecin: Accès complet aux données médicales de ses patients
+    // Médecin: Accès complet aux données médicales
+    // PATIENTS_VIEW_ALL temporaire — sera remplacé par le filtrage care team quand l'UI sera prête
     PERMISSIONS.PATIENTS_VIEW,
+    PERMISSIONS.PATIENTS_VIEW_ALL,
     PERMISSIONS.PATIENTS_CREATE,
     PERMISSIONS.PATIENTS_EDIT,
 
