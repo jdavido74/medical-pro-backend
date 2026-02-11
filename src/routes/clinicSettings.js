@@ -71,9 +71,10 @@ router.get('/', async (req, res) => {
 router.put('/', async (req, res) => {
   try {
     // Validate request body
+    console.error('[clinicSettings] PUT / body monday:', JSON.stringify(req.body.operating_hours?.monday));
     const { error, value } = updateClinicSettingsSchema.validate(req.body);
     if (error) {
-      console.error('[clinicSettings] Validation failed:', error.details[0].message);
+      console.error('[clinicSettings] Validation failed:', error.details.map(d => d.message).join('; '));
       return res.status(400).json({
         success: false,
         error: { message: 'Validation Error', details: error.details[0].message }
