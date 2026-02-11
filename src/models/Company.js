@@ -63,6 +63,10 @@ const Company = sequelize.define('Company', {
       }
     }
   },
+  description: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
   email: {
     type: DataTypes.STRING(255),
     allowNull: false,
@@ -77,6 +81,43 @@ const Company = sequelize.define('Company', {
     validate: {
       is: /^[\+]?[0-9\s\-\(\)]{8,20}$/
     }
+  },
+  db_host: {
+    type: DataTypes.STRING(255),
+    allowNull: false,
+    defaultValue: 'localhost'
+  },
+  db_port: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 5432
+  },
+  db_name: {
+    type: DataTypes.STRING(100),
+    allowNull: false
+  },
+  db_user: {
+    type: DataTypes.STRING(100),
+    allowNull: false,
+    defaultValue: 'medicalpro'
+  },
+  db_password: {
+    type: DataTypes.STRING(255),
+    allowNull: false
+  },
+  subdomain: {
+    type: DataTypes.STRING(50),
+    allowNull: true,
+    unique: true
+  },
+  subscription_status: {
+    type: DataTypes.STRING(50),
+    allowNull: true,
+    defaultValue: 'trial'
+  },
+  subscription_expiry: {
+    type: DataTypes.DATEONLY,
+    allowNull: true
   },
   address: {
     type: DataTypes.JSONB,
@@ -222,7 +263,11 @@ const Company = sequelize.define('Company', {
 // Méthodes d'instance
 Company.prototype.toSafeJSON = function() {
   const values = Object.assign({}, this.get());
-  // Masquer les informations sensibles si nécessaire
+  delete values.db_host;
+  delete values.db_port;
+  delete values.db_name;
+  delete values.db_user;
+  delete values.db_password;
   return values;
 };
 
