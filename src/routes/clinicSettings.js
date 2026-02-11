@@ -71,16 +71,13 @@ router.get('/', async (req, res) => {
 router.put('/', async (req, res) => {
   try {
     // Validate request body
-    console.error('[clinicSettings] PUT / body monday:', JSON.stringify(req.body.operating_hours?.monday));
     const { error, value } = updateClinicSettingsSchema.validate(req.body);
     if (error) {
-      console.error('[clinicSettings] Validation failed:', error.details.map(d => d.message).join('; '));
       return res.status(400).json({
         success: false,
         error: { message: 'Validation Error', details: error.details[0].message }
       });
     }
-    console.log('[clinicSettings] PUT / validated keys:', Object.keys(value));
 
     // Build SET clause dynamically
     const updates = [];
@@ -111,14 +108,12 @@ router.put('/', async (req, res) => {
     `, { replacements });
 
     if (result.length === 0) {
-      console.error('[clinicSettings] PUT / 404 - no row found for facility_id:', req.clinicId);
       return res.status(404).json({
         success: false,
         error: { message: 'Clinic settings not found' }
       });
     }
 
-    console.log('[clinicSettings] PUT / success for facility:', req.clinicId);
     res.json({
       success: true,
       data: result[0],

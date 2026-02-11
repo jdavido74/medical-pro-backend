@@ -173,51 +173,19 @@ const timeRangeSchema = Joi.object({
 });
 
 // Schema pour les horaires d'ouverture d'un jour
+// Accepts both formats: single range (start/end) or split (morning/afternoon)
+const timePattern = /^([0-1][0-9]|2[0-3]):[0-5][0-9]$/;
 const operatingHoursSchema = Joi.object({
   enabled: Joi.boolean().required(),
-  hasLunchBreak: Joi.boolean().default(false),
+  hasLunchBreak: Joi.boolean().optional().default(true),
 
-  // Si hasLunchBreak = false : plage horaire unique
-  start: Joi.string().pattern(/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/)
-    .when('hasLunchBreak', {
-      is: false,
-      then: Joi.when('enabled', {
-        is: true,
-        then: Joi.required(),
-        otherwise: Joi.optional()
-      }),
-      otherwise: Joi.forbidden()
-    }),
-  end: Joi.string().pattern(/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/)
-    .when('hasLunchBreak', {
-      is: false,
-      then: Joi.when('enabled', {
-        is: true,
-        then: Joi.required(),
-        otherwise: Joi.optional()
-      }),
-      otherwise: Joi.forbidden()
-    }),
+  // Format plage unique (hasLunchBreak = false)
+  start: Joi.string().pattern(timePattern).optional(),
+  end: Joi.string().pattern(timePattern).optional(),
 
-  // Si hasLunchBreak = true : deux plages (matin et après-midi)
-  morning: timeRangeSchema.when('hasLunchBreak', {
-    is: true,
-    then: Joi.when('enabled', {
-      is: true,
-      then: Joi.required(),
-      otherwise: Joi.optional()
-    }),
-    otherwise: Joi.forbidden()
-  }),
-  afternoon: timeRangeSchema.when('hasLunchBreak', {
-    is: true,
-    then: Joi.when('enabled', {
-      is: true,
-      then: Joi.required(),
-      otherwise: Joi.optional()
-    }),
-    otherwise: Joi.forbidden()
-  })
+  // Format deux plages (hasLunchBreak = true)
+  morning: timeRangeSchema.optional(),
+  afternoon: timeRangeSchema.optional()
 });
 
 // Schema pour la configuration des créneaux
