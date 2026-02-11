@@ -81,10 +81,10 @@ class ClinicProvisioningService {
    */
   async _createDatabase(dbName, dbUser, dbPassword, dbHost, dbPort) {
     try {
-      // Use psql to create database
+      // Use psql to create database (connect to 'postgres' maintenance DB since the user's default DB may not exist)
       const createDbCommand = `
-        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1 || \
-        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -c "CREATE DATABASE ${dbName};"
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1 || \
+        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d postgres -c "CREATE DATABASE ${dbName};"
       `;
 
       await execAsync(createDbCommand);
