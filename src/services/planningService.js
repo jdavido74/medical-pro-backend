@@ -409,10 +409,39 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
     }
   }
 
-  // If no machines found for a non-overlappable treatment, it's a configuration error
+  // If no machines found for a non-overlappable treatment, fall back to clinic hours
+  // (treatment doesn't require a specific machine — use provider/room availability)
   if (machines.length === 0) {
-    console.warn(`[planningService] No machines configured for non-overlappable treatment: ${treatment.title}`);
-    return { slots: [], machines: [], message: 'No machines configured for this treatment. Please associate machines in the catalog.' };
+    console.log(`[planningService] No machines for treatment "${treatment.title}", falling back to clinic hours`);
+    const clinicRanges = await getClinicHoursRanges(clinicDb, date);
+    if (!clinicRanges || clinicRanges.length === 0) {
+      return { slots: [], machines: [], message: 'Clinic closed on this date' };
+    }
+
+    // Get existing appointments for this provider on this date to avoid double-booking
+    const bookedSlots = [];
+    const availableSlots = calculateAvailableSlots(clinicRanges, bookedSlots, slotDuration);
+    const slots = availableSlots.map(slot => ({
+      ...slot,
+      machineId: null,
+      machineName: null,
+      machineColor: null,
+      duration: slotDuration,
+      isOverlappable: false
+    }));
+
+    return {
+      slots,
+      allSlots: slots,
+      machines: [],
+      treatment: {
+        id: treatment.id,
+        title: treatment.title,
+        duration: slotDuration,
+        isOverlappable: false
+      },
+      isOverlappable: false
+    };
   }
 
   const allSlots = [];
@@ -697,32 +726,28 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
       id: t.treatmentId,
       title: treatment.title,
       duration: t.duration || treatment.duration || 30,
-      machines
+      machines,
+      noMachineRequired: machines.length === 0 // Treatment doesn't need a machine
     };
   }));
 
-  // Check if all treatments have at least one machine
-  for (const td of treatmentData) {
-    if (td.machines.length === 0) {
-      return {
-        slots: [],
-        totalDuration,
-        message: `No machines available for treatment: ${td.title}`
-      };
-    }
-  }
+  // Filter out machine IDs only from treatments that actually need machines
+  // Treatments without machines use clinic hours (no machine blocking)
 
   // Get all existing appointments for all relevant machines on this date
-  const allMachineIds = [...new Set(treatmentData.flatMap(t => t.machines.map(m => m.id)))];
-  const existingAppointments = await Appointment.findAll({
-    where: {
-      machine_id: { [Op.in]: allMachineIds },
-      appointment_date: date,
-      status: { [Op.notIn]: ['cancelled'] }
-    },
-    attributes: ['id', 'machine_id', 'start_time', 'end_time'],
-    order: [['start_time', 'ASC']]
-  });
+  const allMachineIds = [...new Set(treatmentData.filter(t => !t.noMachineRequired).flatMap(t => t.machines.map(m => m.id)))];
+  let existingAppointments = [];
+  if (allMachineIds.length > 0) {
+    existingAppointments = await Appointment.findAll({
+      where: {
+        machine_id: { [Op.in]: allMachineIds },
+        appointment_date: date,
+        status: { [Op.notIn]: ['cancelled'] }
+      },
+      attributes: ['id', 'machine_id', 'start_time', 'end_time'],
+      order: [['start_time', 'ASC']]
+    });
+  }
 
   // Build machine busy times map
   const machineBusyTimes = {};
@@ -754,42 +779,56 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
       const segmentStartTime = minutesToTime(segmentStart);
       const segmentEndTime = minutesToTime(segmentEnd);
 
-      // Find an available machine for this treatment at this time
-      let availableMachine = null;
+      // Treatment without machine: always available during clinic hours
+      if (treatment.noMachineRequired) {
+        segments.push({
+          treatmentId: treatment.id,
+          treatmentTitle: treatment.title,
+          machineId: null,
+          machineName: null,
+          machineColor: null,
+          startTime: segmentStartTime,
+          endTime: segmentEndTime,
+          duration: treatment.duration
+        });
+      } else {
+        // Find an available machine for this treatment at this time
+        let availableMachine = null;
 
-      for (const machine of treatment.machines) {
-        const busyTimes = machineBusyTimes[machine.id] || [];
-        const isAvailable = !busyTimes.some(busy =>
-          timeRangesOverlap(segmentStartTime, segmentEndTime, busy.start, busy.end)
-        );
+        for (const machine of treatment.machines) {
+          const busyTimes = machineBusyTimes[machine.id] || [];
+          const isAvailable = !busyTimes.some(busy =>
+            timeRangesOverlap(segmentStartTime, segmentEndTime, busy.start, busy.end)
+          );
 
-        // Also check against segments already allocated in this slot
-        const alreadyUsedInSlot = segments.some(seg =>
-          seg.machineId === machine.id &&
-          timeRangesOverlap(segmentStartTime, segmentEndTime, seg.startTime, seg.endTime)
-        );
+          // Also check against segments already allocated in this slot
+          const alreadyUsedInSlot = segments.some(seg =>
+            seg.machineId === machine.id &&
+            timeRangesOverlap(segmentStartTime, segmentEndTime, seg.startTime, seg.endTime)
+          );
 
-        if (isAvailable && !alreadyUsedInSlot) {
-          availableMachine = machine;
+          if (isAvailable && !alreadyUsedInSlot) {
+            availableMachine = machine;
+            break;
+          }
+        }
+
+        if (!availableMachine) {
+          isValidSlot = false;
           break;
         }
-      }
 
-      if (!availableMachine) {
-        isValidSlot = false;
-        break;
+        segments.push({
+          treatmentId: treatment.id,
+          treatmentTitle: treatment.title,
+          machineId: availableMachine.id,
+          machineName: availableMachine.name,
+          machineColor: availableMachine.color,
+          startTime: segmentStartTime,
+          endTime: segmentEndTime,
+          duration: treatment.duration
+        });
       }
-
-      segments.push({
-        treatmentId: treatment.id,
-        treatmentTitle: treatment.title,
-        machineId: availableMachine.id,
-        machineName: availableMachine.name,
-        machineColor: availableMachine.color,
-        startTime: segmentStartTime,
-        endTime: segmentEndTime,
-        duration: treatment.duration
-      });
 
       segmentStart = segmentEnd;
     }
