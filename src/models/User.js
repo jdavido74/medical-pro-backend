@@ -47,12 +47,11 @@ const User = sequelize.define('User', {
     }
   },
   role: {
-    type: DataTypes.STRING(20),
+    type: DataTypes.STRING(50),
     allowNull: false,
     defaultValue: 'admin',
     validate: {
-      // Standardized roles: physician, practitioner, secretary, readonly, admin, super_admin
-      isIn: [['super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly']]
+      isIn: [['super_admin', 'admin', 'support', 'physician', 'practitioner', 'secretary', 'readonly']]
     }
   },
   permissions: {
@@ -83,7 +82,7 @@ const User = sequelize.define('User', {
     comment: 'Email verification status'
   },
   email_verification_token: {
-    type: DataTypes.STRING(500),
+    type: DataTypes.TEXT,
     allowNull: true,
     comment: 'JWT token for email verification (expires in 24h)'
   },
@@ -91,6 +90,28 @@ const User = sequelize.define('User', {
     type: DataTypes.DATE,
     allowNull: true,
     comment: 'Timestamp when email was verified'
+  },
+  deleted_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null
+  },
+  totp_enabled: {
+    type: DataTypes.BOOLEAN,
+    allowNull: true,
+    defaultValue: false
+  },
+  totp_secret: {
+    type: DataTypes.STRING(255),
+    allowNull: true
+  },
+  totp_backup_codes: {
+    type: DataTypes.ARRAY(DataTypes.TEXT),
+    allowNull: true
+  },
+  totp_enabled_at: {
+    type: DataTypes.DATE,
+    allowNull: true
   }
 }, {
   tableName: 'users',
@@ -187,6 +208,9 @@ User.prototype.toSafeJSON = function() {
     delete values.updated_at;
   }
   delete values.email_verification_token;
+  delete values.totp_secret;
+  delete values.totp_backup_codes;
+  delete values.deleted_at;
   if (values.email_verified_at !== undefined) {
     values.emailVerifiedAt = values.email_verified_at;
     delete values.email_verified_at;
