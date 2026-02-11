@@ -1850,9 +1850,9 @@ router.post('/set-password', async (req, res) => {
         }, { transaction: centralTransaction });
       } else {
         // Create new central user
-        // Valid roles: super_admin, admin, physician, practitioner, secretary, readonly
-        const validRoles = ['super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly'];
-        const centralRole = validRoles.includes(provider.role) ? provider.role : 'practitioner';
+        // Central users table only stores auth-level roles: super_admin, admin, support
+        // Clinic-level roles (physician, practitioner, etc.) live in healthcare_providers
+        const centralRole = provider.role === 'super_admin' ? 'super_admin' : 'admin';
 
         centralUser = await User.create({
           id: uuidv4(),
