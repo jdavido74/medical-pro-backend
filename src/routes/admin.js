@@ -6,7 +6,7 @@
  */
 
 const express = require('express');
-const { Company, User, Client, Invoice, Quote } = require('../models');
+const { Company, User } = require('../models');
 const { logger } = require('../utils/logger');
 const Joi = require('joi');
 const { Op } = require('sequelize');
@@ -75,23 +75,17 @@ const createUserSchema = Joi.object({
  */
 router.get('/dashboard', requireSuperAdmin, async (req, res, next) => {
   try {
-    // Statistiques globales
+    // Statistiques globales (central DB only — clients/invoices/quotes are in clinic DBs)
     const [
       totalCompanies,
       activeCompanies,
       totalUsers,
-      activeUsers,
-      totalClients,
-      totalInvoices,
-      totalQuotes
+      activeUsers
     ] = await Promise.all([
       Company.count(),
       Company.count({ where: { created_at: { [Op.gte]: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } }),
       User.count(),
-      User.count({ where: { is_active: true } }),
-      Client.count(),
-      Invoice.count(),
-      Quote.count()
+      User.count({ where: { is_active: true } })
     ]);
 
     // Statistiques par rôle
@@ -115,10 +109,7 @@ router.get('/dashboard', requireSuperAdmin, async (req, res, next) => {
           totalCompanies,
           activeCompanies,
           totalUsers,
-          activeUsers,
-          totalClients,
-          totalInvoices,
-          totalQuotes
+          activeUsers
         },
         usersByRole: usersByRole.reduce((acc, item) => {
           acc[item.role] = parseInt(item.count);
@@ -176,27 +167,16 @@ router.get('/companies', requireSuperAdmin, validateQuery(schemas.adminCompanies
       order: [['created_at', 'DESC']]
     });
 
-    // Ajouter statistiques par company
-    const companiesWithStats = await Promise.all(
-      companies.map(async (company) => {
-        const [clientCount, invoiceCount, quoteCount] = await Promise.all([
-          Client.count({ where: { company_id: company.id } }),
-          Invoice.count({ where: { company_id: company.id } }),
-          Quote.count({ where: { company_id: company.id } })
-        ]);
-
-        return {
-          ...company.toJSON(),
-          stats: {
-            clientCount,
-            invoiceCount,
-            quoteCount,
-            userCount: company.users.length,
-            activeUsers: company.users.filter(u => u.is_active).length
-          }
-        };
-      })
-    );
+    // Ajouter statistiques par company (central DB only — clinic stats are in isolated DBs)
+    const companiesWithStats = companies.map((company) => {
+      return {
+        ...company.toJSON(),
+        stats: {
+          userCount: company.users ? company.users.length : 0,
+          activeUsers: company.users ? company.users.filter(u => u.is_active).length : 0
+        }
+      };
+    });
 
     res.json({
       success: true,
@@ -529,9 +509,6 @@ router.delete('/companies/:id', requireSuperAdmin, async (req, res, next) => {
     if (permanent === 'true') {
       // HARD DELETE: Suppression définitive (développement/test uniquement)
       // NOTE: Cette fonctionnalité sera supprimée en production
-      const { Client: ClientModel } = require('../models');
-      const sequelize = require('../config/database').sequelize;
-
       // Vérifier s'il y a des super_admin dans cette company
       const superAdmins = await User.findAll({
         where: {
@@ -551,11 +528,8 @@ router.delete('/companies/:id', requireSuperAdmin, async (req, res, next) => {
         });
       }
 
-      // Supprimer les données de la clinique
+      // Supprimer les utilisateurs centraux de cette company
       await User.destroy({ where: { company_id: companyId } });
-      await ClientModel.destroy({ where: { company_id: companyId } });
-      await Invoice.destroy({ where: { company_id: companyId } });
-      await Quote.destroy({ where: { company_id: companyId } });
 
       // Supprimer la company
       await company.destroy();
@@ -738,24 +712,18 @@ router.delete('/companies/:id/database-data', requireSuperAdmin, async (req, res
     }
 
     // Supprimer les données de la clinique (sans supprimer la company elle-même)
-    const { Client: ClientModel } = require('../models');
+    // Only clear central DB references (clinic data is in isolated DB)
+    await User.destroy({ where: { company_id: companyId } });
 
-    await Promise.all([
-      User.destroy({ where: { company_id: companyId } }),
-      ClientModel.destroy({ where: { company_id: companyId } }),
-      Invoice.destroy({ where: { company_id: companyId } }),
-      Quote.destroy({ where: { company_id: companyId } })
-    ]);
-
-    logger.info(`Database data cleared for company: ${companyId}`);
+    logger.info(`Central database data cleared for company: ${companyId}`);
 
     res.json({
       success: true,
-      message: 'Clinic database data cleared successfully',
+      message: 'Central database data cleared successfully',
       data: {
         companyId,
         clearedAt: new Date(),
-        affectedTables: ['users', 'clients', 'invoices', 'quotes']
+        affectedTables: ['users']
       }
     });
 
