@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS users (
   last_name VARCHAR(100),
 
   -- Role (only for central users)
-  role VARCHAR(50) NOT NULL CHECK (role IN ('super_admin', 'admin', 'support')) DEFAULT 'admin',
+  role VARCHAR(50) NOT NULL CHECK (role IN ('super_admin', 'admin', 'support', 'physician', 'practitioner', 'secretary', 'readonly')) DEFAULT 'admin',
 
   -- Permissions (JSON for flexibility)
   permissions JSONB DEFAULT '{}',
