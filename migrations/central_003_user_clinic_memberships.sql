@@ -25,8 +25,8 @@ CREATE TABLE IF NOT EXISTS user_clinic_memberships (
     -- This allows direct lookup once clinic is selected
     provider_id UUID NOT NULL,
 
-    -- Role in this specific clinic (for display purposes)
-    role_in_clinic VARCHAR(50) NOT NULL DEFAULT 'user',
+    -- Role in this specific clinic (matches healthcare_providers standardized roles)
+    role_in_clinic VARCHAR(50) NOT NULL DEFAULT 'practitioner',
 
     -- If user has multiple clinics, which one is primary/default
     is_primary BOOLEAN NOT NULL DEFAULT false,
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS user_clinic_memberships (
 
     -- Constraints
     CONSTRAINT unique_email_company UNIQUE (email, company_id),
-    CONSTRAINT valid_role CHECK (role_in_clinic IN ('admin', 'doctor', 'nurse', 'secretary', 'technician', 'receptionist', 'user'))
+    CONSTRAINT valid_role CHECK (role_in_clinic IN ('super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly'))
 );
 
 -- ============================================================
