@@ -185,6 +185,8 @@ class ClinicProvisioningService {
         'clinic_056_consent_variable_substitution.sql',
         // Physician: add patients.view_all (temporary until care team UI)
         'clinic_057_physician_patients_view_all.sql',
+        // Current illness free-text field on medical records
+        'clinic_058_current_illness_field.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];

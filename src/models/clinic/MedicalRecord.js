@@ -98,6 +98,10 @@ function createMedicalRecordModel(clinicDb) {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    current_illness: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     symptoms: {
       type: DataTypes.JSONB,
       allowNull: true,

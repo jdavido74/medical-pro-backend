@@ -322,6 +322,7 @@ module.exports.createMedicalRecordSchema = Joi.object({
 
   // Basic consultation info (all fields optional and can be empty)
   chief_complaint: Joi.string().max(2000).allow('', null).optional(),
+  current_illness: Joi.string().max(5000).allow('', null).optional(),
   symptoms: Joi.array().items(Joi.string().allow('', null)).optional(),
   duration: Joi.string().max(100).allow('', null).optional(),
 
@@ -424,6 +425,7 @@ module.exports.updateMedicalRecordSchema = Joi.object({
     .valid('consultation', 'examination', 'treatment', 'follow_up', 'emergency', 'prescription', 'lab_result', 'imaging', 'note')
     .optional(),
   chief_complaint: Joi.string().max(2000).allow('', null).optional(),
+  current_illness: Joi.string().max(5000).allow('', null).optional(),
   symptoms: Joi.array().items(Joi.string()).optional(),
   duration: Joi.string().max(100).allow('', null).optional(),
   vital_signs: Joi.object().optional(),
