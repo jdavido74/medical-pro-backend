@@ -39,7 +39,7 @@ BEGIN
         'Médecin (généraliste ou spécialiste) - Accès complet aux données médicales de ses patients',
         70,
         true,
-        '["patients.view", "patients.create", "patients.edit", "appointments.view", "appointments.create", "appointments.edit", "appointments.delete", "medical_records.view", "medical_records.create", "medical_records.edit", "medical_notes.create", "medical.antecedents.view", "medical.antecedents.edit", "medical.prescriptions.view", "medical.prescriptions.create", "medical.allergies.view", "medical.allergies.edit", "medical.vitals.view", "medical.vitals.edit", "consents.view", "consents.create", "consents.edit", "consents.sign", "consents.revoke", "consent_templates.view", "quotes.view", "quotes.create", "quotes.edit", "analytics.view", "analytics.medical", "teams.view", "delegations.view", "delegations.create", "settings.view"]'::jsonb,
+        '["patients.view", "patients.view_all", "patients.create", "patients.edit", "appointments.view", "appointments.view_all", "appointments.create", "appointments.edit", "appointments.delete", "appointments.confirm", "medical_records.view", "medical_records.create", "medical_records.edit", "medical_notes.create", "medical.antecedents.view", "medical.antecedents.edit", "medical.prescriptions.view", "medical.prescriptions.create", "medical.allergies.view", "medical.allergies.edit", "medical.vitals.view", "medical.vitals.edit", "consents.view", "consents.create", "consents.edit", "consents.sign", "consents.revoke", "consent_templates.view", "quotes.view", "quotes.create", "quotes.edit", "analytics.view", "analytics.medical", "teams.view", "delegations.view", "delegations.create", "settings.view"]'::jsonb,
         'green'
     ) ON CONFLICT (facility_id, name) DO NOTHING;
 

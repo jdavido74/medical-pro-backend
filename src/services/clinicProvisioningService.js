@@ -183,6 +183,8 @@ class ClinicProvisioningService {
         'clinic_055_documents_billing.sql',
         // Consent variable substitution (filled content columns)
         'clinic_056_consent_variable_substitution.sql',
+        // Physician: add patients.view_all (temporary until care team UI)
+        'clinic_057_physician_patients_view_all.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];
