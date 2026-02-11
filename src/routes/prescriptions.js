@@ -42,7 +42,13 @@ const createPrescriptionSchema = Joi.object({
   patient_snapshot: Joi.object().optional(),
   provider_snapshot: Joi.object().optional(),
   vital_signs: Joi.object().optional(),
-  diagnosis: Joi.object().optional()
+  diagnosis: Joi.object().optional(),
+  // Clinical context snapshots for prescription printing
+  basic_info: Joi.object().optional(),
+  current_illness: Joi.string().allow('', null).optional(),
+  antecedents: Joi.object().optional(),
+  physical_exam: Joi.object().optional(),
+  current_medications: Joi.array().optional()
 });
 
 const updatePrescriptionSchema = Joi.object({
@@ -61,7 +67,12 @@ const updatePrescriptionSchema = Joi.object({
   renewable: Joi.boolean().optional(),
   renewals_remaining: Joi.number().integer().min(0).optional(),
   vital_signs: Joi.object().optional(),
-  diagnosis: Joi.object().optional()
+  diagnosis: Joi.object().optional(),
+  basic_info: Joi.object().optional(),
+  current_illness: Joi.string().allow('', null).optional(),
+  antecedents: Joi.object().optional(),
+  physical_exam: Joi.object().optional(),
+  current_medications: Joi.array().optional()
 });
 
 /**

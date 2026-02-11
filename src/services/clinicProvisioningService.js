@@ -187,6 +187,8 @@ class ClinicProvisioningService {
         'clinic_057_physician_patients_view_all.sql',
         // Current illness free-text field on medical records
         'clinic_058_current_illness_field.sql',
+        // Prescription clinical context snapshot columns
+        'clinic_059_prescription_clinical_context.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];

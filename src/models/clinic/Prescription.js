@@ -128,6 +128,31 @@ function createPrescriptionModel(clinicDb) {
       defaultValue: {}
       // { primary, secondary[], icd10[] }
     },
+    // Clinical context snapshots for prescription printing
+    basic_info: {
+      type: DataTypes.JSONB,
+      defaultValue: null,
+      allowNull: true
+    },
+    current_illness: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    antecedents: {
+      type: DataTypes.JSONB,
+      defaultValue: null,
+      allowNull: true
+    },
+    physical_exam: {
+      type: DataTypes.JSONB,
+      defaultValue: null,
+      allowNull: true
+    },
+    current_medications: {
+      type: DataTypes.JSONB,
+      defaultValue: null,
+      allowNull: true
+    },
 
     // Status workflow
     status: {
