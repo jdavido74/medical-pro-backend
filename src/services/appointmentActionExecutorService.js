@@ -132,8 +132,8 @@ class AppointmentActionExecutorService {
     const baseUrl = context.baseUrl || process.env.FRONTEND_URL || 'http://localhost:3000';
     const confirmationUrl = `${baseUrl}/appointment/confirm/${appointment.confirmation_token}`;
 
-    // Format date and time for patient's language
-    const language = patient.preferred_language || 'es';
+    // Resolve language: nationality → company locale → fallback
+    const language = await emailService.resolveLanguageForClinicPatient(patient, clinicDb);
     const appointmentDate = this.formatDate(appointment.appointment_date, language);
     const appointmentTime = this.formatTime(appointment.start_time, language);
 
@@ -188,7 +188,7 @@ class AppointmentActionExecutorService {
     }
 
     const patient = appointment.patient;
-    const language = patient.preferred_language || 'es';
+    const language = await emailService.resolveLanguageForClinicPatient(patient, clinicDb);
 
     // Get treatments for this appointment (could be linked appointments)
     const treatmentIds = await this.getTreatmentIds(clinicDb, appointment);
@@ -338,7 +338,7 @@ class AppointmentActionExecutorService {
     }
 
     const patient = appointment.patient;
-    const language = patient.preferred_language || 'es';
+    const language = await emailService.resolveLanguageForClinicPatient(patient, clinicDb);
 
     // Get treatments for this appointment
     const treatmentIds = await this.getTreatmentIds(clinicDb, appointment);
@@ -478,7 +478,7 @@ class AppointmentActionExecutorService {
       throw new Error('WhatsApp channel is not configured');
     }
 
-    const language = patient.preferred_language || 'es';
+    const language = await emailService.resolveLanguageForClinicPatient(patient, clinicDb);
     const appointmentDate = this.formatDate(appointment.appointment_date, language);
     const appointmentTime = this.formatTime(appointment.start_time, language);
 
@@ -525,7 +525,7 @@ class AppointmentActionExecutorService {
   /**
    * Format date for display
    */
-  formatDate(dateStr, language = 'es') {
+  formatDate(dateStr, language = 'fr') {
     const date = new Date(dateStr);
     const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
     const locales = {
@@ -533,13 +533,13 @@ class AppointmentActionExecutorService {
       en: 'en-US',
       es: 'es-ES'
     };
-    return date.toLocaleDateString(locales[language] || locales.es, options);
+    return date.toLocaleDateString(locales[language] || locales.fr, options);
   }
 
   /**
    * Format time for display
    */
-  formatTime(timeStr, language = 'es') {
+  formatTime(timeStr, language = 'fr') {
     // timeStr is in format HH:MM:SS
     const [hours, minutes] = timeStr.split(':');
     const date = new Date();
@@ -551,7 +551,7 @@ class AppointmentActionExecutorService {
       en: 'en-US',
       es: 'es-ES'
     };
-    return date.toLocaleTimeString(locales[language] || locales.es, options);
+    return date.toLocaleTimeString(locales[language] || locales.fr, options);
   }
 
   /**

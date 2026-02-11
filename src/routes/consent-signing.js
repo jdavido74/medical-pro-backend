@@ -104,8 +104,9 @@ router.post('/', requirePermission(PERMISSIONS.CONSENTS_ASSIGN), async (req, res
       });
     }
 
-    // Resolve language: explicit param > patient preference > default
-    const effectiveLanguage = languageCode || patient.preferred_language || 'fr';
+    // Resolve language: explicit param > nationality > company locale
+    const companyLocale = await emailService.getCompanyLocale(req.user.companyId);
+    const effectiveLanguage = languageCode || emailService.resolvePatientLanguage(patient, companyLocale);
 
     // Calculate expiration
     const expiresAt = new Date();

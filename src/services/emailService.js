@@ -1613,6 +1613,141 @@ class EmailService {
   }
 
   // ══════════════════════════════════════════════════════════════════
+  // Language resolution
+  // ══════════════════════════════════════════════════════════════════
+
+  /**
+   * Nationality (ISO 3166-1 alpha-2 or common names) → language code mapping.
+   * Only maps nationalities that clearly correspond to a supported language.
+   */
+  static get NATIONALITY_TO_LANGUAGE() {
+    return {
+      // French-speaking
+      'FR': 'fr', 'french': 'fr', 'française': 'fr', 'francaise': 'fr', 'français': 'fr', 'francais': 'fr',
+      'BE': 'fr', 'belgian': 'fr', 'belge': 'fr',
+      'CH': 'fr', 'swiss': 'fr', 'suisse': 'fr',
+      'LU': 'fr', 'luxembourgish': 'fr',
+      'MC': 'fr',
+      // Spanish-speaking
+      'ES': 'es', 'spanish': 'es', 'española': 'es', 'espanola': 'es', 'español': 'es', 'espanol': 'es',
+      'MX': 'es', 'mexican': 'es', 'mexicana': 'es', 'mexicano': 'es',
+      'AR': 'es', 'argentine': 'es', 'argentina': 'es', 'argentino': 'es',
+      'CO': 'es', 'colombian': 'es', 'colombiana': 'es', 'colombiano': 'es',
+      'CL': 'es', 'chilean': 'es', 'chilena': 'es', 'chileno': 'es',
+      'PE': 'es', 'peruvian': 'es', 'peruana': 'es', 'peruano': 'es',
+      'VE': 'es', 'EC': 'es', 'UY': 'es', 'PY': 'es', 'BO': 'es',
+      'CR': 'es', 'PA': 'es', 'DO': 'es', 'GT': 'es', 'HN': 'es', 'SV': 'es', 'NI': 'es', 'CU': 'es',
+      // English-speaking
+      'GB': 'en', 'british': 'en', 'UK': 'en',
+      'US': 'en', 'american': 'en', 'americana': 'en', 'americano': 'en',
+      'IE': 'en', 'irish': 'en',
+      'AU': 'en', 'australian': 'en',
+      'CA': 'en', 'canadian': 'en',
+      'NZ': 'en',
+      // Portuguese (fallback to Spanish - closest)
+      'PT': 'es', 'portuguese': 'es', 'portuguesa': 'es', 'portugués': 'es',
+      'BR': 'es', 'brazilian': 'es', 'brasileña': 'es', 'brasileño': 'es',
+      // German (fallback to English)
+      'DE': 'en', 'german': 'en', 'allemand': 'en', 'alemán': 'en',
+      'AT': 'en', 'austrian': 'en',
+      // Italian (fallback to French - closest)
+      'IT': 'fr', 'italian': 'fr', 'italiana': 'fr', 'italiano': 'fr', 'italienne': 'fr',
+      // Moroccan/North African (often French-speaking)
+      'MA': 'fr', 'moroccan': 'fr', 'marocaine': 'fr', 'marocain': 'fr',
+      'DZ': 'fr', 'algerian': 'fr', 'algérienne': 'fr', 'algérien': 'fr',
+      'TN': 'fr', 'tunisian': 'fr', 'tunisienne': 'fr', 'tunisien': 'fr',
+      // Romanian (fallback to French - closest Romance language)
+      'RO': 'fr', 'romanian': 'fr', 'roumaine': 'fr', 'roumain': 'fr'
+    };
+  }
+
+  /**
+   * Extract language code from a company locale string (e.g. 'es-ES' → 'es')
+   * @param {string} locale - Locale like 'fr-FR', 'es-ES', 'en-GB'
+   * @returns {string} Language code
+   */
+  static localeToLanguage(locale) {
+    if (!locale) return 'fr';
+    return locale.split('-')[0].toLowerCase();
+  }
+
+  /**
+   * Resolve the best language for a patient email.
+   *
+   * Priority:
+   * 1. patient.preferred_language (if explicitly set and not the default 'fr')
+   * 2. Language derived from patient.nationality
+   * 3. Company locale (regional context of the clinic)
+   *
+   * @param {object} patient - Patient record with preferred_language and nationality fields
+   * @param {string} companyLocale - Company locale (e.g. 'es-ES', 'fr-FR')
+   * @returns {string} Language code ('fr', 'es', 'en')
+   */
+  resolvePatientLanguage(patient, companyLocale) {
+    const companyLang = EmailService.localeToLanguage(companyLocale);
+
+    if (!patient) return companyLang;
+
+    // 1. Explicit patient preference (only if it differs from the model default 'fr',
+    //    meaning the patient or staff actively chose it)
+    if (patient.preferred_language && patient.preferred_language !== 'fr') {
+      return patient.preferred_language;
+    }
+
+    // 2. Derive from nationality
+    if (patient.nationality) {
+      const nat = patient.nationality.trim();
+      // Try exact match, then uppercase, then lowercase
+      const lang = EmailService.NATIONALITY_TO_LANGUAGE[nat]
+        || EmailService.NATIONALITY_TO_LANGUAGE[nat.toUpperCase()]
+        || EmailService.NATIONALITY_TO_LANGUAGE[nat.toLowerCase()];
+      if (lang) return lang;
+    }
+
+    // 3. If patient has preferred_language = 'fr' but company is Spanish,
+    //    it's likely just the DB default → use company locale instead
+    return companyLang;
+  }
+
+  /**
+   * Get the company locale from the central database.
+   * @param {string} companyId - Company UUID
+   * @returns {string} Locale string (e.g. 'es-ES') or 'fr-FR' as default
+   */
+  async getCompanyLocale(companyId) {
+    try {
+      const Company = require('../models/Company');
+      const company = await Company.findByPk(companyId, { attributes: ['locale'] });
+      return company?.locale || 'fr-FR';
+    } catch (e) {
+      logger.warn('Failed to fetch company locale:', e.message);
+      return 'fr-FR';
+    }
+  }
+
+  /**
+   * Convenience: resolve the best email language for a patient in a given clinic.
+   * Fetches company_id from the clinic DB, then company locale, then resolves.
+   *
+   * @param {object} patient - Patient record
+   * @param {object} clinicDb - Sequelize clinic database connection
+   * @returns {Promise<string>} Language code ('fr', 'es', 'en')
+   */
+  async resolveLanguageForClinicPatient(patient, clinicDb) {
+    try {
+      const [rows] = await clinicDb.query(
+        'SELECT company_id FROM medical_facilities LIMIT 1'
+      );
+      const companyId = rows[0]?.company_id;
+      const companyLocale = companyId ? await this.getCompanyLocale(companyId) : 'fr-FR';
+      return this.resolvePatientLanguage(patient, companyLocale);
+    } catch (e) {
+      logger.warn('Failed to resolve language for clinic patient:', e.message);
+      return this.resolvePatientLanguage(patient, 'fr-FR');
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════
   // Shared layout helpers (used by migrated messaging templates)
   // ══════════════════════════════════════════════════════════════════
 
