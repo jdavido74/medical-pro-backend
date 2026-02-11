@@ -1611,6 +1611,529 @@ class EmailService {
       </html>
     `;
   }
+
+  // ══════════════════════════════════════════════════════════════════
+  // Shared layout helpers (used by migrated messaging templates)
+  // ══════════════════════════════════════════════════════════════════
+
+  /**
+   * Fetch clinic info (name, logo, phone, address) from medical_facilities
+   * @param {Object} clinicDb - Sequelize clinic database connection
+   * @returns {Object} { clinicName, logoUrl, phone, address }
+   */
+  async getClinicInfo(clinicDb) {
+    const info = { clinicName: 'Clinique', logoUrl: null, phone: null, address: null };
+    try {
+      const [rows] = await clinicDb.query(
+        'SELECT name, logo_url, phone, street, city, postal_code, country FROM medical_facilities LIMIT 1'
+      );
+      if (rows[0]) {
+        const f = rows[0];
+        info.clinicName = f.name || info.clinicName;
+        if (f.logo_url) {
+          const baseUrl = process.env.BACKEND_URL || process.env.APP_URL || 'http://localhost:3001';
+          info.logoUrl = `${baseUrl}${f.logo_url}`;
+        }
+        info.phone = f.phone || null;
+        const addressParts = [];
+        if (f.street) addressParts.push(f.street);
+        if (f.postal_code && f.city) addressParts.push(`${f.postal_code} ${f.city}`);
+        else if (f.city) addressParts.push(f.city);
+        if (f.country) addressParts.push(f.country);
+        info.address = addressParts.length > 0 ? addressParts.join(', ') : null;
+      }
+    } catch (e) {
+      // Silently ignore - facility info is optional
+    }
+    return info;
+  }
+
+  /**
+   * Build a full email footer
+   * @param {string} clinicName
+   * @param {string} email - Recipient email shown in footer
+   */
+  getEmailFooter(clinicName, email) {
+    return `
+      <div class="footer" style="color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+        <p>&copy; ${new Date().getFullYear()} ${clinicName} - Powered by MedicalPro</p>
+        ${email ? `<p>This email was sent to ${email}</p>` : ''}
+      </div>`;
+  }
+
+  /**
+   * Wrap content in the full email layout (DOCTYPE, head, styles, container)
+   * @param {Object} opts
+   * @param {string} opts.header - HTML from getEmailHeader()
+   * @param {string} opts.content - Inner HTML body
+   * @param {string} opts.footer - HTML from getEmailFooter()
+   * @param {string} [opts.accentColor='#667eea'] - Button/accent color
+   */
+  getEmailLayout({ header, content, footer, accentColor = '#667eea' }) {
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }
+            .content { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; }
+            .button { display: inline-block; background-color: ${accentColor}; color: white !important; padding: 14px 40px; border-radius: 6px; text-decoration: none; font-weight: bold; margin: 20px 0; font-size: 16px; }
+            .info-box { border-radius: 8px; padding: 20px; margin: 20px 0; }
+            .footer { color: #999; font-size: 12px; text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            ${header}
+            <div class="content">
+              ${content}
+            </div>
+            ${footer}
+          </div>
+        </body>
+      </html>`;
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // Appointment Confirmation Email
+  // ══════════════════════════════════════════════════════════════════
+
+  /**
+   * Send appointment confirmation email
+   */
+  async sendAppointmentConfirmation({ email, patientName, clinicName, appointmentDate, appointmentTime, serviceName, confirmationUrl, language = 'fr', logoUrl = null }) {
+    try {
+      const recipientEmail = this.getRecipientEmail(email);
+
+      let htmlContent = this._getAppointmentConfirmationHtml(language, { email, patientName, clinicName, appointmentDate, appointmentTime, serviceName, confirmationUrl, logoUrl });
+
+      if (this.testModeEnabled) {
+        htmlContent = this.wrapEmailContentWithTestInfo(htmlContent, email);
+      }
+
+      const subjects = {
+        fr: `Confirmez votre rendez-vous - ${clinicName}`,
+        en: `Confirm your appointment - ${clinicName}`,
+        es: `Confirme su cita - ${clinicName}`
+      };
+
+      const mailOptions = {
+        from: process.env.FROM_EMAIL || 'noreply@medicalpro.com',
+        to: recipientEmail,
+        subject: this.getEmailSubject(subjects[language] || subjects.fr, 'CONFIRMATION'),
+        html: htmlContent
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+
+      logger.info(`Appointment confirmation email sent to ${email}`, {
+        provider: this.provider,
+        testMode: this.testModeEnabled
+      });
+
+      return {
+        success: true,
+        channel: 'email',
+        provider: this.provider,
+        messageId: result.messageId,
+        testMode: this.testModeEnabled,
+        actualRecipient: this.testModeEnabled ? recipientEmail : email
+      };
+    } catch (error) {
+      logger.error(`Failed to send appointment confirmation email to ${email}:`, error);
+      throw new Error(`Email sending failed: ${error.message}`);
+    }
+  }
+
+  _getAppointmentConfirmationHtml(language, params) {
+    const { email, patientName, clinicName, appointmentDate, appointmentTime, serviceName, confirmationUrl, logoUrl } = params;
+    const header = this.getEmailHeader({
+      title: { fr: 'Confirmez votre rendez-vous', en: 'Confirm Your Appointment', es: 'Confirme su Cita' }[language] || 'Confirmez votre rendez-vous',
+      subtitle: clinicName,
+      logoUrl,
+      gradientColors: '#667eea, #764ba2'
+    });
+    const footer = this.getEmailFooter(clinicName, email);
+
+    const texts = {
+      fr: {
+        greeting: `Bonjour ${patientName},`,
+        intro: `Vous avez un rendez-vous prévu chez <strong>${clinicName}</strong>.`,
+        date: 'Date',
+        time: 'Heure',
+        treatment: 'Traitement',
+        confirm: 'Merci de confirmer votre présence en cliquant sur le bouton ci-dessous :',
+        button: 'Confirmer ma présence',
+        note: 'Si vous ne pouvez pas venir, merci de nous contacter pour reporter votre rendez-vous.'
+      },
+      en: {
+        greeting: `Hello ${patientName},`,
+        intro: `You have an appointment scheduled at <strong>${clinicName}</strong>.`,
+        date: 'Date',
+        time: 'Time',
+        treatment: 'Treatment',
+        confirm: 'Please confirm your attendance by clicking the button below:',
+        button: 'Confirm My Attendance',
+        note: 'If you cannot attend, please contact us to reschedule your appointment.'
+      },
+      es: {
+        greeting: `Hola ${patientName},`,
+        intro: `Tiene una cita programada en <strong>${clinicName}</strong>.`,
+        date: 'Fecha',
+        time: 'Hora',
+        treatment: 'Tratamiento',
+        confirm: 'Por favor confirme su asistencia haciendo clic en el botón de abajo:',
+        button: 'Confirmar Mi Asistencia',
+        note: 'Si no puede asistir, contáctenos para reprogramar su cita.'
+      }
+    };
+    const t = texts[language] || texts.fr;
+
+    const content = `
+      <h2>${t.greeting}</h2>
+      <p>${t.intro}</p>
+      <div class="info-box" style="background-color: #f0f4ff; border: 1px solid #667eea;">
+        <p style="margin: 5px 0;"><strong>${t.date} :</strong> ${appointmentDate}</p>
+        <p style="margin: 5px 0;"><strong>${t.time} :</strong> ${appointmentTime}</p>
+        ${serviceName ? `<p style="margin: 5px 0;"><strong>${t.treatment} :</strong> ${serviceName}</p>` : ''}
+      </div>
+      <p>${t.confirm}</p>
+      <center>
+        <a href="${confirmationUrl}" class="button">${t.button}</a>
+      </center>
+      <p style="color: #666; font-size: 14px;">${t.note}</p>`;
+
+    return this.getEmailLayout({ header, content, footer, accentColor: '#667eea' });
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // Appointment Reminder Email
+  // ══════════════════════════════════════════════════════════════════
+
+  /**
+   * Send appointment reminder email
+   */
+  async sendAppointmentReminder({ email, patientName, clinicName, appointmentDate, appointmentTime, serviceName, address, language = 'fr', logoUrl = null }) {
+    try {
+      const recipientEmail = this.getRecipientEmail(email);
+
+      let htmlContent = this._getAppointmentReminderHtml(language, { email, patientName, clinicName, appointmentDate, appointmentTime, serviceName, address, logoUrl });
+
+      if (this.testModeEnabled) {
+        htmlContent = this.wrapEmailContentWithTestInfo(htmlContent, email);
+      }
+
+      const subjects = {
+        fr: `Rappel: Rendez-vous demain - ${clinicName}`,
+        en: `Reminder: Appointment tomorrow - ${clinicName}`,
+        es: `Recordatorio: Cita mañana - ${clinicName}`
+      };
+
+      const mailOptions = {
+        from: process.env.FROM_EMAIL || 'noreply@medicalpro.com',
+        to: recipientEmail,
+        subject: this.getEmailSubject(subjects[language] || subjects.fr, 'REMINDER'),
+        html: htmlContent
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+
+      logger.info(`Appointment reminder email sent to ${email}`, {
+        provider: this.provider,
+        testMode: this.testModeEnabled
+      });
+
+      return {
+        success: true,
+        channel: 'email',
+        provider: this.provider,
+        messageId: result.messageId,
+        testMode: this.testModeEnabled,
+        actualRecipient: this.testModeEnabled ? recipientEmail : email
+      };
+    } catch (error) {
+      logger.error(`Failed to send appointment reminder email to ${email}:`, error);
+      throw new Error(`Email sending failed: ${error.message}`);
+    }
+  }
+
+  _getAppointmentReminderHtml(language, params) {
+    const { email, patientName, clinicName, appointmentDate, appointmentTime, serviceName, address, logoUrl } = params;
+    const header = this.getEmailHeader({
+      title: { fr: 'Rappel de rendez-vous', en: 'Appointment Reminder', es: 'Recordatorio de Cita' }[language] || 'Rappel de rendez-vous',
+      subtitle: clinicName,
+      logoUrl,
+      gradientColors: '#f59e0b, #d97706'
+    });
+    const footer = this.getEmailFooter(clinicName, email);
+
+    const texts = {
+      fr: {
+        greeting: `Bonjour ${patientName},`,
+        intro: `Nous vous rappelons votre rendez-vous <strong>demain</strong> chez ${clinicName}.`,
+        date: 'Date',
+        time: 'Heure',
+        treatment: 'Traitement',
+        address: 'Adresse',
+        docs: "N'oubliez pas d'apporter vos documents d'identité et votre carte de santé.",
+        note: 'En cas d\'empêchement, merci de nous prévenir au plus vite.'
+      },
+      en: {
+        greeting: `Hello ${patientName},`,
+        intro: `This is a reminder of your appointment <strong>tomorrow</strong> at ${clinicName}.`,
+        date: 'Date',
+        time: 'Time',
+        treatment: 'Treatment',
+        address: 'Address',
+        docs: "Don't forget to bring your ID and health card.",
+        note: 'If you cannot make it, please let us know as soon as possible.'
+      },
+      es: {
+        greeting: `Hola ${patientName},`,
+        intro: `Le recordamos su cita <strong>mañana</strong> en ${clinicName}.`,
+        date: 'Fecha',
+        time: 'Hora',
+        treatment: 'Tratamiento',
+        address: 'Dirección',
+        docs: 'No olvide traer su documento de identidad y tarjeta sanitaria.',
+        note: 'Si no puede asistir, avísenos lo antes posible.'
+      }
+    };
+    const t = texts[language] || texts.fr;
+
+    const content = `
+      <h2>${t.greeting}</h2>
+      <p>${t.intro}</p>
+      <div class="info-box" style="background-color: #fffbeb; border: 1px solid #f59e0b;">
+        <p style="margin: 5px 0;"><strong>${t.date} :</strong> ${appointmentDate}</p>
+        <p style="margin: 5px 0;"><strong>${t.time} :</strong> ${appointmentTime}</p>
+        ${serviceName ? `<p style="margin: 5px 0;"><strong>${t.treatment} :</strong> ${serviceName}</p>` : ''}
+        ${address ? `<p style="margin: 5px 0;"><strong>${t.address} :</strong> ${address}</p>` : ''}
+      </div>
+      <p>${t.docs}</p>
+      <p style="color: #666; font-size: 14px;">${t.note}</p>`;
+
+    return this.getEmailLayout({ header, content, footer, accentColor: '#f59e0b' });
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // Quote Sent Email
+  // ══════════════════════════════════════════════════════════════════
+
+  /**
+   * Send quote notification email
+   */
+  async sendQuoteSent({ email, patientName, clinicName, quoteNumber, totalAmount, viewUrl, language = 'fr', logoUrl = null }) {
+    try {
+      const recipientEmail = this.getRecipientEmail(email);
+
+      let htmlContent = this._getQuoteSentHtml(language, { email, patientName, clinicName, quoteNumber, totalAmount, viewUrl, logoUrl });
+
+      if (this.testModeEnabled) {
+        htmlContent = this.wrapEmailContentWithTestInfo(htmlContent, email);
+      }
+
+      const subjects = {
+        fr: `Votre devis - ${clinicName}`,
+        en: `Your quote - ${clinicName}`,
+        es: `Su presupuesto - ${clinicName}`
+      };
+
+      const mailOptions = {
+        from: process.env.FROM_EMAIL || 'noreply@medicalpro.com',
+        to: recipientEmail,
+        subject: this.getEmailSubject(subjects[language] || subjects.fr, 'QUOTE'),
+        html: htmlContent
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+
+      logger.info(`Quote email sent to ${email}`, {
+        provider: this.provider,
+        testMode: this.testModeEnabled
+      });
+
+      return {
+        success: true,
+        channel: 'email',
+        provider: this.provider,
+        messageId: result.messageId,
+        testMode: this.testModeEnabled,
+        actualRecipient: this.testModeEnabled ? recipientEmail : email
+      };
+    } catch (error) {
+      logger.error(`Failed to send quote email to ${email}:`, error);
+      throw new Error(`Email sending failed: ${error.message}`);
+    }
+  }
+
+  _getQuoteSentHtml(language, params) {
+    const { email, patientName, clinicName, quoteNumber, totalAmount, viewUrl, logoUrl } = params;
+    const header = this.getEmailHeader({
+      title: { fr: 'Votre devis', en: 'Your Quote', es: 'Su Presupuesto' }[language] || 'Votre devis',
+      subtitle: clinicName,
+      logoUrl,
+      gradientColors: '#10b981, #059669'
+    });
+    const footer = this.getEmailFooter(clinicName, email);
+
+    const texts = {
+      fr: {
+        greeting: `Bonjour ${patientName},`,
+        intro: 'Veuillez trouver ci-joint votre devis pour les soins prévus.',
+        number: 'Numéro',
+        amount: 'Montant total',
+        currency: '€',
+        button: 'Voir le devis',
+        note: "Ce devis est valable 30 jours. Pour toute question, n'hésitez pas à nous contacter."
+      },
+      en: {
+        greeting: `Hello ${patientName},`,
+        intro: 'Please find enclosed your quote for the planned treatments.',
+        number: 'Number',
+        amount: 'Total Amount',
+        currency: '€',
+        button: 'View Quote',
+        note: 'This quote is valid for 30 days. For any questions, please contact us.'
+      },
+      es: {
+        greeting: `Hola ${patientName},`,
+        intro: 'Por favor encuentre adjunto su presupuesto para los tratamientos previstos.',
+        number: 'Número',
+        amount: 'Importe Total',
+        currency: '€',
+        button: 'Ver Presupuesto',
+        note: 'Este presupuesto es válido por 30 días. Para cualquier pregunta, contáctenos.'
+      }
+    };
+    const t = texts[language] || texts.fr;
+
+    const content = `
+      <h2>${t.greeting}</h2>
+      <p>${t.intro}</p>
+      <div class="info-box" style="background-color: #f0fdf4; border: 1px solid #10b981;">
+        <p style="margin: 5px 0;"><strong>${t.number} :</strong> ${quoteNumber}</p>
+        <p style="margin: 5px 0;"><strong>${t.amount} :</strong> ${totalAmount} ${t.currency}</p>
+      </div>
+      ${viewUrl ? `
+      <center>
+        <a href="${viewUrl}" class="button">${t.button}</a>
+      </center>` : ''}
+      <p style="color: #666; font-size: 14px;">${t.note}</p>`;
+
+    return this.getEmailLayout({ header, content, footer, accentColor: '#10b981' });
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // Invoice Ready Email
+  // ══════════════════════════════════════════════════════════════════
+
+  /**
+   * Send invoice ready notification email
+   */
+  async sendInvoiceReady({ email, patientName, clinicName, invoiceNumber, totalAmount, viewUrl, language = 'fr', logoUrl = null }) {
+    try {
+      const recipientEmail = this.getRecipientEmail(email);
+
+      let htmlContent = this._getInvoiceReadyHtml(language, { email, patientName, clinicName, invoiceNumber, totalAmount, viewUrl, logoUrl });
+
+      if (this.testModeEnabled) {
+        htmlContent = this.wrapEmailContentWithTestInfo(htmlContent, email);
+      }
+
+      const subjects = {
+        fr: `Votre facture - ${clinicName}`,
+        en: `Your invoice - ${clinicName}`,
+        es: `Su factura - ${clinicName}`
+      };
+
+      const mailOptions = {
+        from: process.env.FROM_EMAIL || 'noreply@medicalpro.com',
+        to: recipientEmail,
+        subject: this.getEmailSubject(subjects[language] || subjects.fr, 'INVOICE'),
+        html: htmlContent
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+
+      logger.info(`Invoice email sent to ${email}`, {
+        provider: this.provider,
+        testMode: this.testModeEnabled
+      });
+
+      return {
+        success: true,
+        channel: 'email',
+        provider: this.provider,
+        messageId: result.messageId,
+        testMode: this.testModeEnabled,
+        actualRecipient: this.testModeEnabled ? recipientEmail : email
+      };
+    } catch (error) {
+      logger.error(`Failed to send invoice email to ${email}:`, error);
+      throw new Error(`Email sending failed: ${error.message}`);
+    }
+  }
+
+  _getInvoiceReadyHtml(language, params) {
+    const { email, patientName, clinicName, invoiceNumber, totalAmount, viewUrl, logoUrl } = params;
+    const header = this.getEmailHeader({
+      title: { fr: 'Votre facture', en: 'Your Invoice', es: 'Su Factura' }[language] || 'Votre facture',
+      subtitle: clinicName,
+      logoUrl,
+      gradientColors: '#3b82f6, #1d4ed8'
+    });
+    const footer = this.getEmailFooter(clinicName, email);
+
+    const texts = {
+      fr: {
+        greeting: `Bonjour ${patientName},`,
+        intro: 'Votre facture pour les soins reçus est disponible.',
+        number: 'Numéro',
+        amount: 'Montant',
+        currency: '€',
+        button: 'Voir la facture',
+        note: "Pour toute question concernant cette facture, n'hésitez pas à nous contacter."
+      },
+      en: {
+        greeting: `Hello ${patientName},`,
+        intro: 'Your invoice for the services received is now available.',
+        number: 'Number',
+        amount: 'Amount',
+        currency: '€',
+        button: 'View Invoice',
+        note: 'For any questions regarding this invoice, please contact us.'
+      },
+      es: {
+        greeting: `Hola ${patientName},`,
+        intro: 'Su factura por los servicios recibidos está disponible.',
+        number: 'Número',
+        amount: 'Importe',
+        currency: '€',
+        button: 'Ver Factura',
+        note: 'Para cualquier pregunta sobre esta factura, contáctenos.'
+      }
+    };
+    const t = texts[language] || texts.fr;
+
+    const content = `
+      <h2>${t.greeting}</h2>
+      <p>${t.intro}</p>
+      <div class="info-box" style="background-color: #f0f7ff; border: 1px solid #3b82f6;">
+        <p style="margin: 5px 0;"><strong>${t.number} :</strong> ${invoiceNumber}</p>
+        <p style="margin: 5px 0;"><strong>${t.amount} :</strong> ${totalAmount} ${t.currency}</p>
+      </div>
+      ${viewUrl ? `
+      <center>
+        <a href="${viewUrl}" class="button">${t.button}</a>
+      </center>` : ''}
+      <p style="color: #666; font-size: 14px;">${t.note}</p>`;
+
+    return this.getEmailLayout({ header, content, footer, accentColor: '#3b82f6' });
+  }
 }
 
 // Export singleton instance

@@ -12,6 +12,7 @@ const clinicCrudRoutes = require('../base/clinicCrudRoutes');
 const { getModel } = require('../base/ModelFactory');
 const { logger } = require('../utils/logger');
 const emailService = require('../services/emailService');
+const consentVariableService = require('../services/consentVariableService');
 const { validateParams, schemas } = require('../utils/validationSchemas');
 const { PERMISSIONS } = require('../utils/permissionConstants');
 const { requirePermission } = require('../middleware/permissions');
@@ -110,12 +111,36 @@ router.post('/', requirePermission(PERMISSIONS.CONSENTS_ASSIGN), async (req, res
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + expiresInHours);
 
+    // Load practitioner and facility for variable substitution
+    let practitioner = null;
+    try {
+      const HealthcareProvider = await getModel(req.clinicDb, 'HealthcareProvider');
+      // Try to find the practitioner by the authenticated user's email
+      practitioner = await HealthcareProvider.findOne({ where: { email: req.user.email } });
+    } catch (e) {
+      // Not a provider - that's fine
+    }
+
+    const clinicInfo = await emailService.getClinicInfo(req.clinicDb);
+    const facility = {
+      name: clinicInfo.clinicName,
+      phone: clinicInfo.phone,
+      address: clinicInfo.address
+    };
+
+    // Substitute variables in template content
+    const subParams = { patient, practitioner, facility, language: effectiveLanguage };
+    const filledTitle = consentVariableService.fillTemplateVariables(template.title, subParams);
+    const filledDescription = consentVariableService.fillTemplateVariables(template.description, subParams);
+    const filledTerms = consentVariableService.fillTemplateVariables(template.terms, subParams);
+
     // Create the signing request
     const signingRequest = await ConsentSigningRequest.create({
       company_id: req.user.companyId,
       patient_id: patientId,
       consent_template_id: consentTemplateId,
       appointment_id: appointmentId,
+      practitioner_id: practitioner?.id || null,
       signing_token: uuidv4(),
       expires_at: expiresAt,
       status: 'pending',
@@ -124,8 +149,11 @@ router.post('/', requirePermission(PERMISSIONS.CONSENTS_ASSIGN), async (req, res
       recipient_phone: recipientPhone || patient.phone,
       language_code: effectiveLanguage,
       custom_message: customMessage,
+      filled_title: filledTitle,
+      filled_description: filledDescription,
+      filled_terms: filledTerms,
       ip_address_sent: req.ip,
-      created_by: req.user.userId
+      created_by: req.user.id
     });
 
     // Generate signing URL
@@ -140,14 +168,14 @@ router.post('/', requirePermission(PERMISSIONS.CONSENTS_ASSIGN), async (req, res
     if (sentVia === 'email' && email) {
       try {
         // Get clinic name and logo
-        const clinicName = req.user.companyName || 'Clinique';
-        const logoUrl = await emailService.getClinicLogoUrl(req.clinicDb);
+        const clinicName = clinicInfo.clinicName;
+        const logoUrl = clinicInfo.logoUrl;
 
         emailResult = await emailService.sendConsentSigningRequest({
           email,
           patientName: `${patient.first_name} ${patient.last_name}`,
           clinicName,
-          consentTitle: template.title,
+          consentTitle: filledTitle,
           signingUrl,
           expiresAt: expiresAt.toISOString(),
           customMessage,

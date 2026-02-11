@@ -12,6 +12,8 @@ const { logger } = require('../utils/logger');
 const ModelFactory = require('../base/ModelFactory');
 const messagingService = require('./messagingService');
 const { TEMPLATE_TYPES } = require('./messagingService');
+const emailService = require('./emailService');
+const consentVariableService = require('./consentVariableService');
 
 /**
  * Action Executor Service
@@ -143,6 +145,9 @@ class AppointmentActionExecutorService {
       serviceName = service ? service.name : null;
     }
 
+    // Fetch clinic logo
+    const logoUrl = await emailService.getClinicLogoUrl(clinicDb);
+
     // Send confirmation email
     const result = await messagingService.send('email', TEMPLATE_TYPES.APPOINTMENT_CONFIRMATION, {
       email: patient.email,
@@ -153,7 +158,8 @@ class AppointmentActionExecutorService {
       appointmentDate,
       appointmentTime,
       serviceName,
-      confirmationUrl
+      confirmationUrl,
+      logoUrl
     });
 
     return {
@@ -235,17 +241,45 @@ class AppointmentActionExecutorService {
     const createdRequests = [];
     const baseUrl = context.baseUrl || process.env.FRONTEND_URL || 'http://localhost:3000';
 
+    // Fetch clinic info for logo and variable substitution
+    const logoUrl = await emailService.getClinicLogoUrl(clinicDb);
+    const clinicInfo = await emailService.getClinicInfo(clinicDb);
+
+    // Load practitioner for variable substitution (from appointment provider)
+    let practitioner = null;
+    if (appointment.provider_id) {
+      const HealthcareProvider = await ModelFactory.getModel(clinicDb, 'HealthcareProvider');
+      practitioner = await HealthcareProvider.findByPk(appointment.provider_id);
+    }
+
+    // Build facility object for variable substitution
+    const facility = {
+      name: clinicInfo.clinicName,
+      phone: clinicInfo.phone,
+      address: clinicInfo.address
+    };
+
     // Create consent signing requests for each template
     for (const template of templates) {
+      // Substitute variables in template content
+      const subParams = { patient, practitioner, facility, language };
+      const filledTitle = consentVariableService.fillTemplateVariables(template.title, subParams);
+      const filledDescription = consentVariableService.fillTemplateVariables(template.description, subParams);
+      const filledTerms = consentVariableService.fillTemplateVariables(template.terms, subParams);
+
       // Create signing request in patient's language
       const signingRequest = await ConsentSigningRequest.create({
         company_id: template.company_id,
         patient_id: patient.id,
         consent_template_id: template.id,
         appointment_id: appointment.id,
+        practitioner_id: practitioner?.id || null,
         status: 'pending',
         language: language,
         expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        filled_title: filledTitle,
+        filled_description: filledDescription,
+        filled_terms: filledTerms,
         metadata: {
           actionId: action.id,
           sentAutomatically: true
@@ -262,10 +296,11 @@ class AppointmentActionExecutorService {
         language,
         patientName: `${patient.first_name} ${patient.last_name}`
       }, {
-        clinicName: context.clinicName || 'MedicalPro',
-        consentTitle: template.title,
+        clinicName: clinicInfo.clinicName,
+        consentTitle: filledTitle,
         signingUrl,
-        expiresAt: signingRequest.expires_at
+        expiresAt: signingRequest.expires_at,
+        logoUrl
       });
     }
 
@@ -339,6 +374,7 @@ class AppointmentActionExecutorService {
 
     // Send quote notification email
     const baseUrl = context.baseUrl || process.env.FRONTEND_URL || 'http://localhost:3000';
+    const logoUrl = await emailService.getClinicLogoUrl(clinicDb);
 
     await messagingService.send('email', TEMPLATE_TYPES.QUOTE_SENT, {
       email: patient.email,
@@ -348,7 +384,8 @@ class AppointmentActionExecutorService {
       clinicName: context.clinicName || 'MedicalPro',
       quoteNumber,
       totalAmount: totalAmount.toFixed(2),
-      viewUrl: null // Would be set if we had a quote viewing endpoint
+      viewUrl: null, // Would be set if we had a quote viewing endpoint
+      logoUrl
     });
 
     return {

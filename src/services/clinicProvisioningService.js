@@ -181,6 +181,8 @@ class ClinicProvisioningService {
         'clinic_054_drop_provider_appointment_unique.sql',
         // Billing: documents, document_items, document_sequences
         'clinic_055_documents_billing.sql',
+        // Consent variable substitution (filled content columns)
+        'clinic_056_consent_variable_substitution.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];

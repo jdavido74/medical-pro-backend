@@ -204,6 +204,13 @@ router.get('/:token', async (req, res, next) => {
       }
     }
 
+    // Use filled (substituted) content if available, fallback to template for old records
+    const displayContent = {
+      title: request.filled_title || content.title,
+      description: request.filled_description || content.description,
+      terms: request.filled_terms || content.terms
+    };
+
     await models.db.close();
 
     logger.info('Consent signing page accessed', {
@@ -224,9 +231,9 @@ router.get('/:token', async (req, res, next) => {
           lastName: patient.last_name
         },
         consent: {
-          title: content.title,
-          description: content.description,
-          terms: content.terms,
+          title: displayContent.title,
+          description: displayContent.description,
+          terms: displayContent.terms,
           consentType: template.consent_type,
           templateVersion: template.version
         },
@@ -345,16 +352,23 @@ router.post('/:token', async (req, res, next) => {
       signedAt: new Date().toISOString()
     };
 
-    // Create the signed consent
+    // Use filled (substituted) content if available, fallback to template for old records
+    const signedContent = {
+      title: request.filled_title || content.title,
+      description: request.filled_description || content.description,
+      terms: request.filled_terms || content.terms
+    };
+
+    // Create the signed consent with actual patient data
     const consent = await models.Consent.create({
       company_id: companyId,
       patient_id: request.patient_id,
       appointment_id: request.appointment_id,
       consent_template_id: request.consent_template_id,
       consent_type: template.consent_type,
-      title: content.title,
-      description: content.description,
-      terms: content.terms,
+      title: signedContent.title,
+      description: signedContent.description,
+      terms: signedContent.terms,
       status: 'accepted',
       signed_at: new Date(),
       signature_method: signatureMethod,

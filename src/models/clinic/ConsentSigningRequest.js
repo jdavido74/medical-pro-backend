@@ -163,6 +163,31 @@ function createConsentSigningRequestModel(clinicDb) {
       defaultValue: {}
     },
 
+    // Practitioner who created the request
+    practitioner_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'healthcare_providers',
+        key: 'id'
+      },
+      onDelete: 'SET NULL'
+    },
+
+    // Filled content (variables substituted with real patient data)
+    filled_title: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    filled_description: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    filled_terms: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+
     // Creator
     created_by: {
       type: DataTypes.UUID,
@@ -176,7 +201,8 @@ function createConsentSigningRequestModel(clinicDb) {
       { fields: ['signing_token'], unique: true },
       { fields: ['status'] },
       { fields: ['expires_at'] },
-      { fields: ['appointment_id'] }
+      { fields: ['appointment_id'] },
+      { fields: ['practitioner_id'] }
     ]
   });
 
