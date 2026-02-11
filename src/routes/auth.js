@@ -294,7 +294,6 @@ router.post('/register', async (req, res, next) => {
     // ============================================================
     // ROLLBACK: Handle registration failure
     // ============================================================
-    console.error('❌ Registration failed:', error.message, error.stack);
     logger.error('❌ Registration failed:', {
       error: error.message,
       clinicId,

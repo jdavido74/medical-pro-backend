@@ -186,10 +186,7 @@ User.prototype.toSafeJSON = function() {
     values.updatedAt = values.updated_at;
     delete values.updated_at;
   }
-  if (values.email_verification_token !== undefined) {
-    values.emailVerificationToken = values.email_verification_token;
-    delete values.email_verification_token;
-  }
+  delete values.email_verification_token;
   if (values.email_verified_at !== undefined) {
     values.emailVerifiedAt = values.email_verified_at;
     delete values.email_verified_at;
