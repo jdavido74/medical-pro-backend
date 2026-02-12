@@ -1613,6 +1613,206 @@ class EmailService {
   }
 
   // ══════════════════════════════════════════════════════════════════
+  // Password Reset Email
+  // ══════════════════════════════════════════════════════════════════
+
+  /**
+   * Send password reset email
+   */
+  async sendPasswordResetEmail({ email, firstName, resetUrl, expiresAt, language = 'fr' }) {
+    try {
+      console.log('[EmailService] Sending password reset email:', {
+        email,
+        language,
+        testMode: this.testModeEnabled
+      });
+
+      const recipientEmail = this.getRecipientEmail(email);
+
+      let htmlContent = this.getPasswordResetEmailTemplate(language, {
+        email,
+        firstName,
+        resetUrl,
+        expiresAt
+      });
+
+      if (this.testModeEnabled) {
+        htmlContent = this.wrapEmailContentWithTestInfo(htmlContent, email);
+      }
+
+      const subjects = {
+        fr: 'Réinitialisation de votre mot de passe - MediMaestro',
+        en: 'Reset your password - MediMaestro',
+        es: 'Restablecer su contraseña - MediMaestro'
+      };
+
+      const mailOptions = {
+        from: process.env.FROM_EMAIL || 'noreply@medicalpro.com',
+        to: recipientEmail,
+        subject: this.getEmailSubject(subjects[language] || subjects.fr, 'PASSWORD_RESET'),
+        html: htmlContent
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+
+      // Log in development
+      if (this.provider === 'console') {
+        logger.warn('📧 [DEVELOPMENT] Password reset email would be sent:');
+        logger.warn('─'.repeat(80));
+        logger.warn(`TO: ${email}`);
+        logger.warn(`FROM: ${mailOptions.from}`);
+        logger.warn(`SUBJECT: ${mailOptions.subject}`);
+        logger.warn('─'.repeat(80));
+        logger.warn('RESET LINK:');
+        logger.warn(resetUrl);
+        logger.warn('─'.repeat(80));
+      }
+
+      logger.info(`Password reset email sent to ${email}`, {
+        provider: this.provider,
+        testMode: this.testModeEnabled
+      });
+
+      return {
+        success: true,
+        provider: this.provider,
+        messageId: result.messageId,
+        testMode: this.testModeEnabled,
+        actualRecipient: this.testModeEnabled ? recipientEmail : email
+      };
+    } catch (error) {
+      console.error('[EmailService] Password reset email error:', error);
+      logger.error(`Failed to send password reset email to ${email}:`, error);
+      throw new Error(`Email sending failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get password reset email template based on language
+   */
+  getPasswordResetEmailTemplate(language, params) {
+    const templates = {
+      fr: this._getPasswordResetTemplateFR,
+      en: this._getPasswordResetTemplateEN,
+      es: this._getPasswordResetTemplateES
+    };
+
+    const templateFn = templates[language] || templates.fr;
+    return templateFn.call(this, params);
+  }
+
+  _getPasswordResetTemplateFR({ email, firstName, resetUrl, expiresAt }) {
+    const header = this.getEmailHeader({
+      title: 'Réinitialisation du mot de passe',
+      subtitle: 'MediMaestro',
+      gradientColors: '#f59e0b, #d97706'
+    });
+    const footer = this.getEmailFooter('MediMaestro', email);
+
+    const content = `
+      <h2>Bonjour ${firstName || ''},</h2>
+
+      <p>Nous avons reçu une demande de réinitialisation de votre mot de passe.</p>
+
+      <p>Cliquez sur le bouton ci-dessous pour choisir un nouveau mot de passe :</p>
+
+      <center>
+        <a href="${resetUrl}" class="button" style="background-color: #f59e0b;">Réinitialiser mon mot de passe</a>
+      </center>
+
+      <p style="color: #666; font-size: 14px; text-align: center;">
+        Vous pouvez également copier ce lien dans votre navigateur :<br>
+        <code style="word-break: break-all; font-size: 12px;">${resetUrl}</code>
+      </p>
+
+      <div class="info-box" style="background-color: #fffbeb; border: 1px solid #f59e0b;">
+        <p style="margin: 5px 0; color: #92400e;">
+          ⚠️ <strong>Ce lien expire dans 1 heure</strong> pour des raisons de sécurité.
+        </p>
+      </div>
+
+      <p style="color: #666; font-size: 14px;">
+        Si vous n'avez pas demandé cette réinitialisation, vous pouvez ignorer cet email en toute sécurité. Votre mot de passe actuel restera inchangé.
+      </p>`;
+
+    return this.getEmailLayout({ header, content, footer, accentColor: '#f59e0b' });
+  }
+
+  _getPasswordResetTemplateEN({ email, firstName, resetUrl, expiresAt }) {
+    const header = this.getEmailHeader({
+      title: 'Password Reset',
+      subtitle: 'MediMaestro',
+      gradientColors: '#f59e0b, #d97706'
+    });
+    const footer = this.getEmailFooter('MediMaestro', email);
+
+    const content = `
+      <h2>Hello ${firstName || ''},</h2>
+
+      <p>We received a request to reset your password.</p>
+
+      <p>Click the button below to choose a new password:</p>
+
+      <center>
+        <a href="${resetUrl}" class="button" style="background-color: #f59e0b;">Reset My Password</a>
+      </center>
+
+      <p style="color: #666; font-size: 14px; text-align: center;">
+        You can also copy this link into your browser:<br>
+        <code style="word-break: break-all; font-size: 12px;">${resetUrl}</code>
+      </p>
+
+      <div class="info-box" style="background-color: #fffbeb; border: 1px solid #f59e0b;">
+        <p style="margin: 5px 0; color: #92400e;">
+          ⚠️ <strong>This link expires in 1 hour</strong> for security reasons.
+        </p>
+      </div>
+
+      <p style="color: #666; font-size: 14px;">
+        If you did not request this reset, you can safely ignore this email. Your current password will remain unchanged.
+      </p>`;
+
+    return this.getEmailLayout({ header, content, footer, accentColor: '#f59e0b' });
+  }
+
+  _getPasswordResetTemplateES({ email, firstName, resetUrl, expiresAt }) {
+    const header = this.getEmailHeader({
+      title: 'Restablecer Contraseña',
+      subtitle: 'MediMaestro',
+      gradientColors: '#f59e0b, #d97706'
+    });
+    const footer = this.getEmailFooter('MediMaestro', email);
+
+    const content = `
+      <h2>Hola ${firstName || ''},</h2>
+
+      <p>Hemos recibido una solicitud para restablecer su contraseña.</p>
+
+      <p>Haga clic en el botón de abajo para elegir una nueva contraseña:</p>
+
+      <center>
+        <a href="${resetUrl}" class="button" style="background-color: #f59e0b;">Restablecer Mi Contraseña</a>
+      </center>
+
+      <p style="color: #666; font-size: 14px; text-align: center;">
+        También puede copiar este enlace en su navegador:<br>
+        <code style="word-break: break-all; font-size: 12px;">${resetUrl}</code>
+      </p>
+
+      <div class="info-box" style="background-color: #fffbeb; border: 1px solid #f59e0b;">
+        <p style="margin: 5px 0; color: #92400e;">
+          ⚠️ <strong>Este enlace expira en 1 hora</strong> por razones de seguridad.
+        </p>
+      </div>
+
+      <p style="color: #666; font-size: 14px;">
+        Si no solicitó este restablecimiento, puede ignorar este correo de forma segura. Su contraseña actual no se modificará.
+      </p>`;
+
+    return this.getEmailLayout({ header, content, footer, accentColor: '#f59e0b' });
+  }
+
+  // ══════════════════════════════════════════════════════════════════
   // Language resolution
   // ══════════════════════════════════════════════════════════════════
 

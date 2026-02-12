@@ -112,6 +112,14 @@ const User = sequelize.define('User', {
   totp_enabled_at: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  password_reset_token: {
+    type: DataTypes.STRING(64),
+    allowNull: true
+  },
+  password_reset_expires_at: {
+    type: DataTypes.DATE,
+    allowNull: true
   }
 }, {
   tableName: 'users',
@@ -211,6 +219,8 @@ User.prototype.toSafeJSON = function() {
   delete values.totp_secret;
   delete values.totp_backup_codes;
   delete values.deleted_at;
+  delete values.password_reset_token;
+  delete values.password_reset_expires_at;
   if (values.email_verified_at !== undefined) {
     values.emailVerifiedAt = values.email_verified_at;
     delete values.email_verified_at;

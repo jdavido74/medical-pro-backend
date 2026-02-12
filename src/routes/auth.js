@@ -13,6 +13,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../config/jwt');
 const { Company, User, UserClinicMembership, sequelize } = require('../models');
@@ -20,11 +21,25 @@ const { getClinicConnection, getCentralConnection } = require('../config/connect
 const { getCentralDbConnection } = require('../config/database');
 const { logger } = require('../utils/logger');
 const Joi = require('joi');
+const { RateLimiterMemory } = require('rate-limiter-flexible');
 const emailService = require('../services/emailService');
 const clinicProvisioningService = require('../services/clinicProvisioningService');
 const { formatAuthResponse } = require('../utils/authHelpers');
 
 const router = express.Router();
+
+// Rate limiters for forgot-password (anti email-bombing)
+const forgotPasswordLimiterByIP = new RateLimiterMemory({
+  keyPrefix: 'forgot_password_ip',
+  points: 5,
+  duration: 15 * 60 // 15 minutes
+});
+
+const forgotPasswordLimiterByEmail = new RateLimiterMemory({
+  keyPrefix: 'forgot_password_email',
+  points: 3,
+  duration: 15 * 60 // 15 minutes
+});
 
 // Schémas de validation
 const registerSchema = Joi.object({
@@ -2020,6 +2035,242 @@ router.post('/resend-invitation', async (req, res) => {
     res.status(500).json({
       success: false,
       error: { message: 'Failed to resend invitation', details: error.message }
+    });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════
+// Password Reset (Forgot Password) Endpoints
+// ══════════════════════════════════════════════════════════════════
+
+const forgotPasswordSchema = Joi.object({
+  email: Joi.string().email().required()
+});
+
+const resetPasswordSchema = Joi.object({
+  token: Joi.string().required(),
+  password: Joi.string().min(8).required()
+});
+
+/**
+ * POST /auth/forgot-password
+ * Request a password reset email.
+ * SECURITY: Always returns success to prevent email enumeration.
+ */
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { error, value } = forgotPasswordSchema.validate(req.body);
+    if (error) {
+      // Still return success to prevent enumeration
+      return res.json({ success: true });
+    }
+
+    const { email } = value;
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Rate limit by IP and email — silently absorb if rate-limited
+    try {
+      await forgotPasswordLimiterByIP.consume(req.ip);
+      await forgotPasswordLimiterByEmail.consume(normalizedEmail);
+    } catch (rateLimitErr) {
+      // Silently return success (don't reveal rate limiting)
+      logger.warn(`[auth] Forgot password rate limited for ${normalizedEmail} from ${req.ip}`);
+      return res.json({ success: true });
+    }
+
+    // Find user in central DB
+    const user = await User.findOne({
+      where: { email: normalizedEmail, is_active: true }
+    });
+
+    if (!user) {
+      // User not found — return success anyway (no email enumeration)
+      logger.info(`[auth] Forgot password requested for non-existent email: ${normalizedEmail}`);
+      return res.json({ success: true });
+    }
+
+    // Generate token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetExpiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    // Save token on user
+    await user.update({
+      password_reset_token: resetToken,
+      password_reset_expires_at: resetExpiresAt
+    });
+
+    // Determine language from company locale
+    let language = 'fr';
+    if (user.company_id) {
+      try {
+        const company = await Company.findByPk(user.company_id, { attributes: ['locale'] });
+        if (company?.locale) {
+          language = company.locale.split('-')[0].toLowerCase();
+        }
+      } catch (e) {
+        // Fallback to fr
+      }
+    }
+
+    const locale = { fr: 'fr-FR', en: 'en-GB', es: 'es-ES' }[language] || 'fr-FR';
+    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/${locale}/reset-password?token=${resetToken}`;
+
+    // Send email
+    try {
+      await emailService.sendPasswordResetEmail({
+        email: normalizedEmail,
+        firstName: user.first_name,
+        resetUrl,
+        expiresAt: resetExpiresAt,
+        language
+      });
+    } catch (emailErr) {
+      logger.error(`[auth] Failed to send password reset email to ${normalizedEmail}:`, emailErr);
+      // Still return success — don't reveal email sending failure
+    }
+
+    logger.info(`[auth] Password reset email sent to ${normalizedEmail}`);
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error('[auth] Forgot password error:', error);
+    // Even on server error, return success for security
+    res.json({ success: true });
+  }
+});
+
+/**
+ * POST /auth/verify-reset-token
+ * Verify a password reset token and return minimal user info.
+ */
+router.post('/verify-reset-token', async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'NO_TOKEN', message: 'No reset token provided' }
+      });
+    }
+
+    const user = await User.findOne({
+      where: { password_reset_token: token, is_active: true }
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'TOKEN_NOT_FOUND', message: 'Invalid or already used reset token' }
+      });
+    }
+
+    // Check expiration
+    if (user.password_reset_expires_at && new Date(user.password_reset_expires_at) < new Date()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'TOKEN_EXPIRED', message: 'Reset token has expired. Please request a new one.' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        email: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name
+      }
+    });
+
+  } catch (error) {
+    console.error('[auth] Verify reset token error:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to verify reset token' }
+    });
+  }
+});
+
+/**
+ * POST /auth/reset-password
+ * Reset password using a valid token.
+ */
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { error, value } = resetPasswordSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error: { message: error.details[0].message }
+      });
+    }
+
+    const { token, password } = value;
+
+    const user = await User.findOne({
+      where: { password_reset_token: token, is_active: true }
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'TOKEN_NOT_FOUND', message: 'Invalid or already used reset token' }
+      });
+    }
+
+    // Check expiration
+    if (user.password_reset_expires_at && new Date(user.password_reset_expires_at) < new Date()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'TOKEN_EXPIRED', message: 'Reset token has expired. Please request a new one.' }
+      });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    // Atomic update: set password + clear token
+    await user.update({
+      password_hash: hashedPassword,
+      password_reset_token: null,
+      password_reset_expires_at: null
+    });
+
+    // Best-effort sync to clinic DBs
+    try {
+      const memberships = await UserClinicMembership.findAll({
+        where: { email: user.email }
+      });
+
+      for (const membership of memberships) {
+        try {
+          const clinicDb = await getClinicConnection(membership.company_id);
+          if (clinicDb) {
+            await clinicDb.query(
+              `UPDATE healthcare_providers SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE email = $2`,
+              { bind: [hashedPassword, user.email] }
+            );
+          }
+        } catch (syncErr) {
+          logger.warn(`[auth] Failed to sync password to clinic ${membership.company_id}:`, syncErr.message);
+        }
+      }
+    } catch (syncErr) {
+      logger.warn('[auth] Failed to sync password to clinic DBs:', syncErr.message);
+    }
+
+    logger.info(`[auth] Password reset successful for ${user.email}`);
+
+    res.json({
+      success: true,
+      message: 'Password has been reset successfully. You can now login.'
+    });
+
+  } catch (error) {
+    console.error('[auth] Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to reset password' }
     });
   }
 });
