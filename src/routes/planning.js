@@ -1028,7 +1028,7 @@ router.put('/appointments/group/:groupId', async (req, res) => {
 
   try {
     const { groupId } = req.params;
-    const { date, startTime, notes, priority, status, providerId, assistantId } = req.body;
+    const { date, startTime, notes, priority, status, providerId, assistantId, newTreatments } = req.body;
 
     const Appointment = await getModel(req.clinicDb, 'Appointment');
     const Patient = await getModel(req.clinicDb, 'Patient');
@@ -1104,6 +1104,44 @@ router.put('/appointments/group/:groupId', async (req, res) => {
         if (Object.keys(updateData).length > 0) {
           await apt.update(updateData, { transaction });
         }
+      }
+    }
+
+    // Handle new treatments added to the group
+    if (newTreatments && newTreatments.length > 0) {
+      const lastApt = groupAppointments[groupAppointments.length - 1];
+      let currentStartMinutes = planningService.timeToMinutes(lastApt.end_time);
+      const appointmentDate = date || lastApt.appointment_date;
+      let maxSequence = Math.max(...groupAppointments.map(a => a.link_sequence || 0));
+
+      for (const treatment of newTreatments) {
+        const segmentStartTime = planningService.minutesToTime(currentStartMinutes);
+        const segmentEndTime = planningService.minutesToTime(currentStartMinutes + treatment.duration);
+        maxSequence++;
+
+        const treatmentInfo = await ProductService.findByPk(treatment.treatmentId);
+
+        await Appointment.create({
+          facility_id: groupAppointments[0].facility_id,
+          patient_id: groupAppointments[0].patient_id,
+          category: 'treatment',
+          type: 'procedure',
+          appointment_date: appointmentDate,
+          start_time: segmentStartTime,
+          end_time: segmentEndTime,
+          duration_minutes: treatment.duration,
+          machine_id: treatment.machineId || null,
+          provider_id: providerId !== undefined ? (providerId || null) : (groupAppointments[0].provider_id || null),
+          assistant_id: assistantId !== undefined ? (assistantId || null) : (groupAppointments[0].assistant_id || null),
+          service_id: treatment.treatmentId,
+          title: treatmentInfo?.title || 'Treatment',
+          priority: priority || groupAppointments[0].priority,
+          status: 'scheduled',
+          link_sequence: maxSequence,
+          linked_appointment_id: groupId
+        }, { transaction });
+
+        currentStartMinutes += treatment.duration;
       }
     }
 
