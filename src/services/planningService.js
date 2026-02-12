@@ -10,11 +10,11 @@ const { getModel } = require('../base/ModelFactory');
  * Default clinic hours (can be overridden by clinic settings)
  */
 const DEFAULT_CLINIC_HOURS = {
-  monday: { open: '09:00', close: '18:00' },
-  tuesday: { open: '09:00', close: '18:00' },
-  wednesday: { open: '09:00', close: '18:00' },
-  thursday: { open: '09:00', close: '18:00' },
-  friday: { open: '09:00', close: '18:00' },
+  monday: { open: '08:00', close: '18:00' },
+  tuesday: { open: '08:00', close: '18:00' },
+  wednesday: { open: '08:00', close: '18:00' },
+  thursday: { open: '08:00', close: '18:00' },
+  friday: { open: '08:00', close: '17:00' },
   saturday: { open: '09:00', close: '13:00' },
   sunday: null // Closed
 };
@@ -96,21 +96,34 @@ function parseClinicHoursForDay(operatingHours, dayName) {
   const dayHours = operatingHours[dayName];
   if (!dayHours.enabled) return null;
 
-  // Lunch break format → two ranges
-  if (dayHours.hasLunchBreak && dayHours.morning && dayHours.afternoon) {
-    const ranges = [];
-    if (dayHours.morning.start && dayHours.morning.end) {
-      ranges.push({ open: dayHours.morning.start, close: dayHours.morning.end });
-    }
-    if (dayHours.afternoon.start && dayHours.afternoon.end) {
-      ranges.push({ open: dayHours.afternoon.start, close: dayHours.afternoon.end });
-    }
-    return ranges.length > 0 ? ranges : null;
-  }
-
-  // Simple format → single range
+  // Simple format → single range (top-level start/end)
   if (dayHours.start && dayHours.end) {
     return [{ open: dayHours.start, close: dayHours.end }];
+  }
+
+  // Has morning/afternoon sub-objects
+  if (dayHours.morning && dayHours.afternoon) {
+    // Lunch break enabled → two separate ranges
+    if (dayHours.hasLunchBreak) {
+      const ranges = [];
+      if (dayHours.morning.start && dayHours.morning.end) {
+        ranges.push({ open: dayHours.morning.start, close: dayHours.morning.end });
+      }
+      if (dayHours.afternoon.start && dayHours.afternoon.end) {
+        ranges.push({ open: dayHours.afternoon.start, close: dayHours.afternoon.end });
+      }
+      return ranges.length > 0 ? ranges : null;
+    }
+
+    // No lunch break but has morning/afternoon structure → morning holds full-day range
+    if (dayHours.morning.start && dayHours.morning.end) {
+      return [{ open: dayHours.morning.start, close: dayHours.morning.end }];
+    }
+  }
+
+  // Only morning sub-object
+  if (dayHours.morning && dayHours.morning.start && dayHours.morning.end) {
+    return [{ open: dayHours.morning.start, close: dayHours.morning.end }];
   }
 
   return null;
@@ -165,7 +178,12 @@ async function getClinicHoursRanges(clinicDb, date) {
       // Parse operating hours for the day
       const dayOfWeek = getDayOfWeek(date);
       const parsed = parseClinicHoursForDay(settings.operating_hours, dayOfWeek);
-      if (parsed) return parsed;
+      if (parsed) {
+        console.log(`[planningService] Clinic hours for ${dayOfWeek} (${date}):`, JSON.stringify(parsed));
+        return parsed;
+      }
+    } else {
+      console.warn('[planningService] No clinic_settings row found, using defaults');
     }
   } catch (err) {
     console.warn('[planningService] Could not load clinic_settings, using defaults:', err.message);
@@ -174,6 +192,7 @@ async function getClinicHoursRanges(clinicDb, date) {
   // Fallback to hardcoded defaults
   const dayOfWeek = getDayOfWeek(date);
   const fallback = DEFAULT_CLINIC_HOURS[dayOfWeek];
+  console.log(`[planningService] Using DEFAULT hours for ${dayOfWeek}:`, JSON.stringify(fallback));
   return fallback ? [fallback] : null;
 }
 
