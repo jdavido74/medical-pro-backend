@@ -20,10 +20,10 @@ const createAppointmentSchema = Joi.object({
   date: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
   startTime: Joi.string().pattern(/^\d{2}:\d{2}$/).required(),
   duration: Joi.number().integer().min(5).max(480).required(),
-  // For treatments
-  machineId: Joi.string().uuid().when('category', {
+  // For treatments (allow null for overlappable treatments that don't need a machine)
+  machineId: Joi.string().uuid().allow(null).when('category', {
     is: 'treatment',
-    then: Joi.required(),
+    then: Joi.optional(),
     otherwise: Joi.optional()
   }),
   treatmentId: Joi.string().uuid().when('category', {
@@ -87,7 +87,7 @@ const createMultiTreatmentSchema = Joi.object({
   treatments: Joi.array().items(
     Joi.object({
       treatmentId: Joi.string().uuid().required(),
-      machineId: Joi.string().uuid().required(),
+      machineId: Joi.string().uuid().allow(null).optional(),
       duration: Joi.number().integer().min(5).max(480).required(),
       providerId: Joi.string().uuid().allow(null, '').optional(),
       assistantId: Joi.string().uuid().allow(null, '').optional()
