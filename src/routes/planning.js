@@ -164,8 +164,10 @@ const transformAppointment = (apt) => {
       title: data.service.title,
       duration: data.service.duration,
       unitPrice: data.service.unit_price != null ? parseFloat(data.service.unit_price) : null,
-      taxRate: data.service.tax_rate != null ? parseFloat(data.service.tax_rate) : null
+      taxRate: data.service.tax_rate != null ? parseFloat(data.service.tax_rate) : null,
+      isOverlappable: data.service.is_overlappable === true
     } : undefined,
+    isOverlappable: data.service?.is_overlappable === true,
     // Workflow fields
     consentStatus: data.consent_status,
     quoteId: data.quote_id,
@@ -427,7 +429,7 @@ router.post('/appointments', async (req, res) => {
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
         { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
         { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
-        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
+        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate', 'is_overlappable'], required: false }
       ]
     });
 
@@ -478,7 +480,7 @@ router.get('/appointments/:id', async (req, res) => {
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
         { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
         { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
-        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
+        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate', 'is_overlappable'], required: false }
       ]
     });
 
@@ -568,7 +570,7 @@ router.put('/appointments/:id', async (req, res) => {
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
         { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
         { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
-        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
+        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate', 'is_overlappable'], required: false }
       ]
     });
 
@@ -875,23 +877,25 @@ router.post('/appointments/multi-treatment', async (req, res) => {
       const segmentStartTime = planningService.minutesToTime(currentStartMinutes);
       const segmentEndTime = planningService.minutesToTime(currentStartMinutes + treatment.duration);
 
-      // Check for conflicts
-      const hasConflict = await Appointment.checkMachineConflict(
-        treatment.machineId,
-        date,
-        segmentStartTime,
-        segmentEndTime
-      );
+      // Check for machine conflicts (skip for overlappable / no-machine treatments)
+      if (treatment.machineId) {
+        const hasConflict = await Appointment.checkMachineConflict(
+          treatment.machineId,
+          date,
+          segmentStartTime,
+          segmentEndTime
+        );
 
-      if (hasConflict) {
-        await transaction.rollback();
-        return res.status(409).json({
-          success: false,
-          error: {
-            message: `Machine conflict for treatment ${i + 1} at ${segmentStartTime}`,
-            treatmentIndex: i
-          }
-        });
+        if (hasConflict) {
+          await transaction.rollback();
+          return res.status(409).json({
+            success: false,
+            error: {
+              message: `Machine conflict for treatment ${i + 1} at ${segmentStartTime}`,
+              treatmentIndex: i
+            }
+          });
+        }
       }
 
       // Get treatment info for title
@@ -944,7 +948,7 @@ router.post('/appointments/multi-treatment', async (req, res) => {
           { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
           { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
           { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
-          { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
+          { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate', 'is_overlappable'], required: false }
         ]
       });
       return transformAppointment(apt);
@@ -989,7 +993,7 @@ router.get('/appointments/group/:groupId', async (req, res) => {
         { model: Patient, as: 'patient', attributes: ['id', 'first_name', 'last_name'] },
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
         { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
-        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
+        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate', 'is_overlappable'], required: false }
       ]
     });
 
@@ -1056,24 +1060,26 @@ router.put('/appointments/group/:groupId', async (req, res) => {
         const newStartTime = planningService.minutesToTime(currentStartMinutes);
         const newEndTime = planningService.minutesToTime(currentStartMinutes + apt.duration_minutes);
 
-        // Check for conflicts (exclude current appointment)
-        const hasConflict = await Appointment.checkMachineConflict(
-          apt.machine_id,
-          date || apt.appointment_date,
-          newStartTime,
-          newEndTime,
-          apt.id
-        );
+        // Check for machine conflicts (skip for no-machine appointments)
+        if (apt.machine_id) {
+          const hasConflict = await Appointment.checkMachineConflict(
+            apt.machine_id,
+            date || apt.appointment_date,
+            newStartTime,
+            newEndTime,
+            apt.id
+          );
 
-        if (hasConflict) {
-          await transaction.rollback();
-          return res.status(409).json({
-            success: false,
-            error: {
-              message: `Machine conflict at ${newStartTime}`,
-              appointmentId: apt.id
-            }
-          });
+          if (hasConflict) {
+            await transaction.rollback();
+            return res.status(409).json({
+              success: false,
+              error: {
+                message: `Machine conflict at ${newStartTime}`,
+                appointmentId: apt.id
+              }
+            });
+          }
         }
 
         const updateData = {
@@ -1154,7 +1160,7 @@ router.put('/appointments/group/:groupId', async (req, res) => {
         { model: Machine, as: 'machine', attributes: ['id', 'name', 'color', 'location'], required: false },
         { model: HealthcareProvider, as: 'provider', attributes: ['id', 'first_name', 'last_name', 'specialties'], required: false },
         { model: HealthcareProvider, as: 'assistant', attributes: ['id', 'first_name', 'last_name'], required: false },
-        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate'], required: false }
+        { model: ProductService, as: 'service', attributes: ['id', 'title', 'duration', 'unit_price', 'tax_rate', 'is_overlappable'], required: false }
       ]
     });
 

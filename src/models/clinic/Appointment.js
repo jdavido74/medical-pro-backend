@@ -507,6 +507,9 @@ function createAppointmentModel(clinicDb) {
    * Check for machine time conflicts (for treatment appointments)
    */
   Appointment.checkMachineConflict = async function(machineId, date, startTime, endTime, excludeId = null) {
+    // No machine assigned → no machine conflict possible
+    if (!machineId) return false;
+
     const { Op } = require('sequelize');
 
     const where = {

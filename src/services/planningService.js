@@ -429,15 +429,14 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
   }
 
   // If no machines found for a non-overlappable treatment, fall back to clinic hours
-  // (treatment doesn't require a specific machine — use provider/room availability)
+  // This is a configuration issue — treatment should have machines assigned
   if (machines.length === 0) {
-    console.log(`[planningService] No machines for treatment "${treatment.title}", falling back to clinic hours`);
+    console.warn(`[planningService] Non-overlappable treatment "${treatment.title}" has no machines configured — configuration issue`);
     const clinicRanges = await getClinicHoursRanges(clinicDb, date);
     if (!clinicRanges || clinicRanges.length === 0) {
       return { slots: [], machines: [], message: 'Clinic closed on this date' };
     }
 
-    // Get existing appointments for this provider on this date to avoid double-booking
     const bookedSlots = [];
     const availableSlots = calculateAvailableSlots(clinicRanges, bookedSlots, slotDuration);
     const slots = availableSlots.map(slot => ({
@@ -459,7 +458,13 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
         duration: slotDuration,
         isOverlappable: false
       },
-      isOverlappable: false
+      isOverlappable: false,
+      warnings: [{
+        type: 'noMachineConfig',
+        treatmentId: treatment.id,
+        treatmentTitle: treatment.title,
+        message: `Treatment "${treatment.title}" is not overlappable but has no machine configured`
+      }]
     };
   }
 
@@ -680,13 +685,27 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
   const totalDuration = treatments.reduce((sum, t) => sum + (t.duration || 30), 0);
 
   // Load treatment info and their available machines
+  const warnings = [];
   const treatmentData = await Promise.all(treatments.map(async (t) => {
     const treatment = await ProductService.findByPk(t.treatmentId);
     if (!treatment) {
       throw new Error(`Treatment not found: ${t.treatmentId}`);
     }
 
-    // Get machines for this treatment - try multiple methods
+    // Overlappable treatments don't need a machine
+    if (treatment.is_overlappable === true) {
+      console.log(`[planningService] Treatment "${treatment.title}" is overlappable — no machine required`);
+      return {
+        id: t.treatmentId,
+        title: treatment.title,
+        duration: t.duration || treatment.duration || 30,
+        machines: [],
+        noMachineRequired: true,
+        isOverlappable: true
+      };
+    }
+
+    // Non-overlappable: find associated machines
     let machines = [];
 
     // Method 1: Try via Sequelize association
@@ -727,18 +746,15 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
       }
     }
 
-    // Method 3: If still no machines, get all active machines as fallback
-    // This assumes any machine can perform any treatment if no specific mapping exists
+    // Non-overlappable with no machines = configuration issue
     if (machines.length === 0) {
-      try {
-        machines = await Machine.findAll({
-          where: { is_active: true },
-          raw: true
-        });
-        console.log(`[planningService] Using all ${machines.length} active machines as fallback for treatment: ${treatment.title}`);
-      } catch (fallbackErr) {
-        console.error('[planningService] Fallback machine query failed:', fallbackErr.message);
-      }
+      console.warn(`[planningService] Non-overlappable treatment "${treatment.title}" has no machines configured`);
+      warnings.push({
+        type: 'noMachineConfig',
+        treatmentId: t.treatmentId,
+        treatmentTitle: treatment.title,
+        message: `Treatment "${treatment.title}" is not overlappable but has no machine configured`
+      });
     }
 
     return {
@@ -746,7 +762,8 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
       title: treatment.title,
       duration: t.duration || treatment.duration || 30,
       machines,
-      noMachineRequired: machines.length === 0 // Treatment doesn't need a machine
+      noMachineRequired: machines.length === 0,
+      isOverlappable: false
     };
   }));
 
@@ -798,7 +815,7 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
       const segmentStartTime = minutesToTime(segmentStart);
       const segmentEndTime = minutesToTime(segmentEnd);
 
-      // Treatment without machine: always available during clinic hours
+      // Treatment without machine (overlappable or no config): always available during clinic hours
       if (treatment.noMachineRequired) {
         segments.push({
           treatmentId: treatment.id,
@@ -808,7 +825,8 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
           machineColor: null,
           startTime: segmentStartTime,
           endTime: segmentEndTime,
-          duration: treatment.duration
+          duration: treatment.duration,
+          isOverlappable: treatment.isOverlappable || false
         });
       } else {
         // Find an available machine for this treatment at this time
@@ -874,18 +892,21 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
   return {
     slots: validSlots,
     totalDuration,
+    warnings: warnings.length > 0 ? warnings : undefined,
     treatments: treatmentData.map(t => ({
       id: t.id,
       title: t.title,
       duration: t.duration,
-      machinesCount: t.machines.length
+      machinesCount: t.machines.length,
+      isOverlappable: t.isOverlappable || false
     })),
     debug: {
       clinicHours,
       treatmentsWithMachines: treatmentData.map(t => ({
         title: t.title,
         machinesCount: t.machines.length,
-        machineNames: t.machines.map(m => m.name)
+        machineNames: t.machines.map(m => m.name),
+        isOverlappable: t.isOverlappable || false
       }))
     }
   };
