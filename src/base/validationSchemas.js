@@ -6,6 +6,7 @@
 const Joi = require('joi');
 
 // First, define all atomic schemas
+// Note: HTML stripping is handled globally by sanitizeMiddleware (src/middleware/sanitize.js)
 const atomicSchemas = {
   firstName: Joi.string().min(2).max(100).trim(),
   lastName: Joi.string().min(2).max(100).trim(),

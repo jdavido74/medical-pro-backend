@@ -72,6 +72,7 @@ const { authMiddleware } = require('./src/middleware/auth');
 const { clinicStatusMiddleware } = require('./src/middleware/clinicStatus');
 const { clinicRoutingMiddleware } = require('./src/middleware/clinicRouting');
 const { regionMiddleware } = require('./src/utils/regionDetector');
+const sanitizeMiddleware = require('./src/middleware/sanitize');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -161,6 +162,9 @@ app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('combined', { stream: httpLoggerStream }));
+
+// Strip HTML tags from all incoming string values (XSS defence-in-depth)
+app.use(sanitizeMiddleware);
 
 // Region detection middleware (detects country from sub-domain)
 app.use(regionMiddleware());
