@@ -17,29 +17,20 @@ const { User, Company, UserClinicMembership } = require('../models');
  */
 const authMiddleware = async (req, res, next) => {
   try {
-    // Récupérer le header Authorization
+    // Récupérer le token : Authorization header (primary) ou cookie (fallback)
+    let token = null;
     const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        error: {
-          message: 'Authentication required',
-          details: 'Missing or invalid Authorization header',
-          timestamp: new Date().toISOString()
-        }
-      });
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
     }
-
-    // Extraire le token
-    const token = authHeader.substring(7); // Enlever "Bearer "
 
     if (!token) {
       return res.status(401).json({
         success: false,
         error: {
           message: 'Authentication required',
-          details: 'No token provided',
+          details: 'Missing or invalid Authorization header',
           timestamp: new Date().toISOString()
         }
       });

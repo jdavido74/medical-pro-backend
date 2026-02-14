@@ -64,7 +64,7 @@ async function findSigningRequestByToken(token) {
   const centralDb = new Seq(
     process.env.DB_NAME || 'medicalpro_central',
     process.env.DB_USER || 'medicalpro',
-    process.env.DB_PASSWORD || 'medicalpro2024',
+    process.env.DB_PASSWORD,
     {
       host: process.env.DB_HOST || 'localhost',
       port: process.env.DB_PORT || 5432,

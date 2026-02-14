@@ -7,7 +7,7 @@ const sequelize = new Sequelize({
   port: process.env.DB_PORT || 5432,
   database: process.env.CENTRAL_DB_NAME || 'medicalpro_central',
   username: process.env.DB_USER || 'medicalpro',
-  password: process.env.DB_PASSWORD || 'medicalpro2024',
+  password: process.env.DB_PASSWORD,
   dialect: process.env.DB_DIALECT || 'postgres',
   logging: process.env.NODE_ENV === 'development' ? console.log : false,
   pool: {

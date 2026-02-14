@@ -28,6 +28,30 @@ const { formatAuthResponse } = require('../utils/authHelpers');
 
 const router = express.Router();
 
+// ============================================================
+// Cookie configuration for httpOnly refresh tokens
+// ============================================================
+const isProduction = process.env.NODE_ENV === 'production';
+
+function setRefreshTokenCookie(res, refreshToken) {
+  res.cookie('refresh_token', refreshToken, {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'strict' : 'lax',
+    path: '/api/v1/auth',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days (matches JWT_REFRESH_EXPIRE)
+  });
+}
+
+function clearRefreshTokenCookie(res) {
+  res.clearCookie('refresh_token', {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'strict' : 'lax',
+    path: '/api/v1/auth',
+  });
+}
+
 // Rate limiters for forgot-password (anti email-bombing)
 const forgotPasswordLimiterByIP = new RateLimiterMemory({
   keyPrefix: 'forgot_password_ip',
@@ -218,7 +242,7 @@ router.post('/register', async (req, res, next) => {
       db_host: process.env.DB_HOST || 'localhost',
       db_port: parseInt(process.env.DB_PORT) || 5432,
       db_user: process.env.DB_USER || 'medicalpro',
-      db_password: process.env.DB_PASSWORD || 'medicalpro2024',
+      db_password: process.env.DB_PASSWORD,
       clinic_db_provisioned: false // DEFERRED: Will be provisioned on first login
     }, { transaction });
 
@@ -255,7 +279,7 @@ router.post('/register', async (req, res, next) => {
 
     const verificationToken = jwt.sign(
       verificationTokenPayload,
-      process.env.JWT_SECRET || 'your-super-secret-jwt-key',
+      process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
@@ -599,6 +623,9 @@ router.post('/login', async (req, res, next) => {
       const accessToken = generateAccessToken(tokenPayload);
       const refreshToken = generateRefreshToken(tokenPayload);
 
+      // Set refresh token as httpOnly cookie
+      setRefreshTokenCookie(res, refreshToken);
+
       return res.json({
         success: true,
         data: {
@@ -608,7 +635,6 @@ router.post('/login', async (req, res, next) => {
           permissions: ['*'], // Super admin has all permissions
           tokens: {
             accessToken,
-            refreshToken,
             expiresIn: '24h'
           },
           isSuperAdmin: true
@@ -734,7 +760,7 @@ router.post('/login', async (req, res, next) => {
 
       const provisioningToken = jwt.sign(
         provisioningTokenPayload,
-        process.env.JWT_SECRET || 'your-super-secret-jwt-key',
+        process.env.JWT_SECRET,
         { expiresIn: '1h' } // 1 hour for provisioning
       );
 
@@ -805,6 +831,9 @@ router.post('/login', async (req, res, next) => {
       logger.warn('Could not fetch provider_id during login', { error: providerError.message });
     }
 
+    // Set refresh token as httpOnly cookie
+    setRefreshTokenCookie(res, refreshToken);
+
     res.json({
       success: true,
       data: {
@@ -812,7 +841,6 @@ router.post('/login', async (req, res, next) => {
         providerId,   // ID du healthcare_provider pour les opérations cliniques
         tokens: {
           accessToken,
-          refreshToken,
           expiresIn: '24h'
         }
       },
@@ -833,9 +861,10 @@ router.post('/login', async (req, res, next) => {
  */
 router.post('/refresh', async (req, res, next) => {
   try {
-    // Validation
-    const { error, value } = refreshTokenSchema.validate(req.body);
-    if (error) {
+    // Read refresh token from httpOnly cookie first, then body (backward compat)
+    const refreshToken = req.cookies?.refresh_token || req.body?.refreshToken || req.body?.token;
+
+    if (!refreshToken) {
       return res.status(400).json({
         success: false,
         error: {
@@ -844,8 +873,6 @@ router.post('/refresh', async (req, res, next) => {
         }
       });
     }
-
-    const { refreshToken } = value;
 
     // Vérifier le refresh token
     const decoded = verifyRefreshToken(refreshToken);
@@ -924,12 +951,16 @@ router.post('/refresh', async (req, res, next) => {
     };
 
     const newAccessToken = generateAccessToken(tokenPayload);
+    const newRefreshToken = generateRefreshToken(tokenPayload);
 
     logger.debug(`Token refreshed for user: ${centralUser.email}`, {
       userId: centralUser.id,
       companyId: validatedCompanyId,
       authSource: 'central_db'
     });
+
+    // Rotate refresh token cookie
+    setRefreshTokenCookie(res, newRefreshToken);
 
     res.json({
       success: true,
@@ -991,7 +1022,7 @@ router.post('/provision-clinic', async (req, res, next) => {
     // Verify the provisioning token
     let decoded;
     try {
-      decoded = jwt.verify(provisioningToken, process.env.JWT_SECRET || 'your-super-secret-jwt-key');
+      decoded = jwt.verify(provisioningToken, process.env.JWT_SECRET);
     } catch (verifyError) {
       return res.status(401).json({
         success: false,
@@ -1134,7 +1165,7 @@ router.post('/provision-clinic', async (req, res, next) => {
       host: company.db_host || process.env.DB_HOST || 'localhost',
       port: company.db_port || parseInt(process.env.DB_PORT) || 5432,
       user: company.db_user || process.env.DB_USER || 'medicalpro',
-      password: company.db_password || process.env.DB_PASSWORD || 'medicalpro2024'
+      password: company.db_password || process.env.DB_PASSWORD
     };
 
     try {
@@ -1217,8 +1248,8 @@ router.post('/provision-clinic', async (req, res, next) => {
  * @access Private
  */
 router.post('/logout', (req, res) => {
-  // Pour l'instant, logout côté client seulement
-  // TODO: Implémenter blacklist tokens si nécessaire
+  // Clear httpOnly refresh token cookie
+  clearRefreshTokenCookie(res);
 
   logger.info(`User logged out`, {
     userId: req.user?.id,
@@ -1257,7 +1288,7 @@ router.post('/verify-email/:token', async (req, res, next) => {
     // Verify and decode the token
     let decoded;
     try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-super-secret-jwt-key');
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (verifyError) {
       return res.status(401).json({
         success: false,
@@ -1396,7 +1427,7 @@ router.post('/resend-verification-email', async (req, res, next) => {
 
     const verificationToken = jwt.sign(
       verificationTokenPayload,
-      process.env.JWT_SECRET || 'your-super-secret-jwt-key',
+      process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
@@ -1946,9 +1977,9 @@ router.post('/set-password', async (req, res) => {
 
 /**
  * POST /auth/resend-invitation
- * Resend invitation email (admin only)
+ * Resend invitation email (admin only -- requires authentication)
  */
-router.post('/resend-invitation', async (req, res) => {
+router.post('/resend-invitation', require('../middleware/auth').authMiddleware, async (req, res) => {
   try {
     const { providerId, clinicId } = req.body;
 

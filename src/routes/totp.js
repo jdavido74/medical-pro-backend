@@ -6,10 +6,20 @@
 
 const express = require('express');
 const router = express.Router();
+const { RateLimiterMemory } = require('rate-limiter-flexible');
 const { authMiddleware } = require('../middleware/auth');
 const totpService = require('../services/totpService');
 const { getCentralDbConnection } = require('../config/database');
 const { logger } = require('../utils/logger');
+
+// Aggressive rate limiter for 2FA validation (unauthenticated endpoint)
+// 5 attempts per 15 minutes per IP to prevent brute force of 6-digit codes
+const twoFaValidateLimiter = new RateLimiterMemory({
+  keyPrefix: '2fa_validate',
+  points: 5,
+  duration: 15 * 60,
+  blockDuration: 15 * 60
+});
 
 // Middleware to require super_admin role
 const requireSuperAdmin = (req, res, next) => {
@@ -209,9 +219,22 @@ router.post('/verify-setup', authMiddleware, requireSuperAdmin, async (req, res)
  * POST /api/v1/auth/2fa/validate
  * Validate a TOTP code during login
  * Called after successful password authentication
+ *
+ * Rate limited: 5 attempts per 15 minutes per IP
  */
 router.post('/validate', async (req, res) => {
   try {
+    // Rate limit by IP to prevent brute force
+    try {
+      await twoFaValidateLimiter.consume(req.ip || req.connection.remoteAddress);
+    } catch (rateLimitError) {
+      logger.warn(`2FA validate rate limit exceeded for IP: ${req.ip}`);
+      return res.status(429).json({
+        success: false,
+        error: 'Too many attempts. Please try again later.'
+      });
+    }
+
     const { userId, code } = req.body;
 
     if (!userId || !code) {

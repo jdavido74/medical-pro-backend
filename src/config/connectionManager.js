@@ -55,7 +55,7 @@ function generateSequelizeConfig(options) {
   const {
     database,
     username = process.env.DB_USER || 'medicalpro',
-    password = process.env.DB_PASSWORD || 'medicalpro2024',
+    password = process.env.DB_PASSWORD,
     host = process.env.DB_HOST || 'localhost',
     port = process.env.DB_PORT || 5432,
     pool = {}
@@ -217,7 +217,7 @@ async function getClinicConnectionInfo(clinicId) {
       db_port: process.env.DB_PORT || 5432,
       db_name: dbName,
       db_user: process.env.DB_USER || 'medicalpro',
-      db_password: process.env.DB_PASSWORD || 'medicalpro2024'
+      db_password: process.env.DB_PASSWORD
     };
 
     console.log('✅ [ConnectionManager] Clinic connection info retrieved:', {

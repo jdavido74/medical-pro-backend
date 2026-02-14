@@ -10,6 +10,16 @@ const { logger } = require('../utils/logger');
 
 const execAsync = promisify(exec);
 
+/**
+ * Execute a shell command with PGPASSWORD passed via environment variable
+ * instead of interpolating it into the command string (prevents command injection).
+ */
+function execPsql(command, dbPassword) {
+  return execAsync(command, {
+    env: { ...process.env, PGPASSWORD: dbPassword }
+  });
+}
+
 class ClinicProvisioningService {
   /**
    * Auto-provision clinic database
@@ -25,7 +35,7 @@ class ClinicProvisioningService {
     try {
       const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
       const dbUser = process.env.DB_USER || 'medicalpro';
-      const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+      const dbPassword = process.env.DB_PASSWORD;
       const dbHost = process.env.DB_HOST || 'localhost';
       const dbPort = process.env.DB_PORT || 5432;
 
@@ -81,13 +91,11 @@ class ClinicProvisioningService {
    */
   async _createDatabase(dbName, dbUser, dbPassword, dbHost, dbPort) {
     try {
-      // Use psql to create database (connect to 'postgres' maintenance DB since the user's default DB may not exist)
-      const createDbCommand = `
-        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1 || \
-        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d postgres -c "CREATE DATABASE ${dbName};"
-      `;
+      // Use psql to create database -- PGPASSWORD passed via env (not interpolated in shell)
+      const createDbCommand = `psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1 || \
+        psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d postgres -c "CREATE DATABASE ${dbName};"`;
 
-      await execAsync(createDbCommand);
+      await execPsql(createDbCommand, dbPassword);
       logger.debug(`Database created or already exists: ${dbName}`);
     } catch (error) {
       throw new Error(`Failed to create database ${dbName}: ${error.message}`);
@@ -195,10 +203,10 @@ class ClinicProvisioningService {
 
       for (const migrationFile of migrationFiles) {
         const migrationPath = `/var/www/medical-pro-backend/migrations/${migrationFile}`;
-        const runMigrationCommand = `PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -f ${migrationPath}`;
+        const runMigrationCommand = `psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -f ${migrationPath}`;
 
         try {
-          await execAsync(runMigrationCommand);
+          await execPsql(runMigrationCommand, dbPassword);
           logger.debug(`✅ Migration executed: ${migrationFile}`);
         } catch (migrationError) {
           // Some migrations might fail if tables already exist - that's ok
@@ -223,7 +231,7 @@ class ClinicProvisioningService {
       const defaultFacilityId = clinicId; // Use clinic ID as first facility ID
 
       const createFacilityCommand = `
-        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} << 'EOF'
+        psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} << 'EOF'
 INSERT INTO medical_facilities (
   id,
   name,
@@ -251,18 +259,18 @@ ON CONFLICT (id) DO NOTHING;
 EOF
       `;
 
-      await execAsync(createFacilityCommand);
+      await execPsql(createFacilityCommand, dbPassword);
       logger.info(`✅ Default facility created: ${clinicName}`);
 
       // Step 2: Insert default clinic roles for this facility
       const insertRolesCommand = `
-        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} << 'EOF'
+        psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} << 'EOF'
 SELECT insert_default_clinic_roles('${defaultFacilityId}'::uuid);
 EOF
       `;
 
       try {
-        await execAsync(insertRolesCommand);
+        await execPsql(insertRolesCommand, dbPassword);
         logger.info(`✅ Default clinic roles created for facility: ${defaultFacilityId}`);
       } catch (roleError) {
         // Log but don't fail provisioning if roles can't be created
@@ -377,12 +385,12 @@ EOF
     try {
       const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
       const dbUser = process.env.DB_USER || 'medicalpro';
-      const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+      const dbPassword = process.env.DB_PASSWORD;
       const dbHost = process.env.DB_HOST || 'localhost';
       const dbPort = process.env.DB_PORT || 5432;
 
-      const testCommand = `PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -c "SELECT 1;"`;
-      await execAsync(testCommand);
+      const testCommand = `psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -c "SELECT 1;"`;
+      await execPsql(testCommand, dbPassword);
 
       logger.info(`✅ Clinic database verified: ${dbName}`);
       return true;
@@ -407,25 +415,21 @@ EOF
     try {
       const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
       const dbUser = process.env.DB_USER || 'medicalpro';
-      const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+      const dbPassword = process.env.DB_PASSWORD;
       const dbHost = process.env.DB_HOST || 'localhost';
       const dbPort = process.env.DB_PORT || 5432;
 
       logger.info(`🗑️ Cleaning up failed provisioning for clinic: ${clinicId}`);
 
       // Check if database exists
-      const checkDbCommand = `
-        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1
-      `;
+      const checkDbCommand = `psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1`;
 
       try {
-        await execAsync(checkDbCommand);
+        await execPsql(checkDbCommand, dbPassword);
 
         // Database exists, drop it
-        const dropDbCommand = `
-          PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -c "DROP DATABASE IF EXISTS ${dbName};"
-        `;
-        await execAsync(dropDbCommand);
+        const dropDbCommand = `psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -c "DROP DATABASE IF EXISTS ${dbName};"`;
+        await execPsql(dropDbCommand, dbPassword);
 
         logger.info(`✅ Cleaned up database: ${dbName}`);
       } catch (error) {
@@ -450,17 +454,15 @@ EOF
     try {
       const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
       const dbUser = process.env.DB_USER || 'medicalpro';
-      const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+      const dbPassword = process.env.DB_PASSWORD;
       const dbHost = process.env.DB_HOST || 'localhost';
       const dbPort = process.env.DB_PORT || 5432;
 
       // 1. Check if database exists
-      const checkDbCommand = `
-        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1
-      `;
+      const checkDbCommand = `psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'" | grep -q 1`;
 
       try {
-        await execAsync(checkDbCommand);
+        await execPsql(checkDbCommand, dbPassword);
       } catch (error) {
         return {
           exists: false,
@@ -472,12 +474,10 @@ EOF
       }
 
       // 2. Check if database is accessible
-      const connectCommand = `
-        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -c "SELECT 1;" 2>&1
-      `;
+      const connectCommand = `psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -c "SELECT 1;" 2>&1`;
 
       try {
-        await execAsync(connectCommand);
+        await execPsql(connectCommand, dbPassword);
       } catch (error) {
         return {
           exists: true,
@@ -489,11 +489,9 @@ EOF
       }
 
       // 3. Count tables
-      const countTablesCommand = `
-        PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -tc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';"
-      `;
+      const countTablesCommand = `psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -tc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';"`;
 
-      const { stdout } = await execAsync(countTablesCommand);
+      const { stdout } = await execPsql(countTablesCommand, dbPassword);
       const tablesCount = parseInt(stdout.trim()) || 0;
 
       // 4. Check for required tables
@@ -507,12 +505,10 @@ EOF
 
       const missingTables = [];
       for (const table of requiredTables) {
-        const checkTableCommand = `
-          PGPASSWORD='${dbPassword}' psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -tc "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '${table}';" | grep -q 1
-        `;
+        const checkTableCommand = `psql -h ${dbHost} -U ${dbUser} -p ${dbPort} -d ${dbName} -tc "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '${table}';" | grep -q 1`;
 
         try {
-          await execAsync(checkTableCommand);
+          await execPsql(checkTableCommand, dbPassword);
         } catch (error) {
           missingTables.push(table);
         }
@@ -583,7 +579,7 @@ EOF
 
         const dbName = `medicalpro_clinic_${clinicId.replace(/-/g, '_')}`;
         const dbUser = process.env.DB_USER || 'medicalpro';
-        const dbPassword = process.env.DB_PASSWORD || 'medicalpro2024';
+        const dbPassword = process.env.DB_PASSWORD;
         const dbHost = process.env.DB_HOST || 'localhost';
         const dbPort = process.env.DB_PORT || 5432;
 

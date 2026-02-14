@@ -1,461 +1,586 @@
-# 🔐 Guide de Sécurité - Medical Pro
+# Guide de Sécurité - MedicalPro
 
-## Vue d'ensemble
+## Table des matières
 
-Ce guide décrit les principes de sécurité fondamentaux de l'application Medical Pro et comment les mettre en œuvre dans les développements futurs.
-
-**OBJECTIF:** Prévenir les failles de sécurité liées à:
-- Modification du rôle/permissions au client
-- Accès non autorisé à d'autres cliniques
-- Tampering du JWT
-- Audit trails non-sécurisés
-- Exécution d'actions sans permissions
+1. [Audit de sécurité (2026-02-14)](#audit-de-sécurité-2026-02-14)
+2. [Corrections appliquées](#corrections-appliquées)
+3. [Architecture de sécurité](#architecture-de-sécurité)
+4. [Principes fondamentaux](#principes-fondamentaux)
+5. [Patterns de sécurité](#patterns-de-sécurité)
+6. [Checklist de sécurité](#checklist-de-sécurité)
+7. [Tests de sécurité](#tests-de-sécurité)
 
 ---
 
-## 🔑 Principes Fondamentaux
+## Audit de sécurité (2026-02-14)
 
-### 1. La Vérité Unique au Backend
+Un audit complet de pénétration a été réalisé sur l'ensemble de l'infrastructure MedicalPro :
+- **app.medimaestro.com** (frontend React SPA)
+- **admin.medimaestro.com** (portail d'administration)
+- **Backend API** (Node.js/Express + PostgreSQL)
+- **Infrastructure** (Nginx, SSL, SSH, CI/CD)
 
-**RÈGLE:** Les rôles, permissions et données sensibles sont TOUJOURS valides côté serveur.
+### Résumé des findings
 
-✅ **CORRECT:**
+| Sévérité | Nombre | Statut |
+|----------|--------|--------|
+| CRITICAL | 6 | Corrigé |
+| HIGH | 16 | Corrigé (principaux) |
+| MEDIUM | 27 | Corrigé (principaux) |
+| LOW | 15 | Partiellement corrigé |
+
+### Corrections CRITICAL
+
+| # | Vulnérabilité | Fichier(s) | Correction |
+|---|---|---|---|
+| 1 | Secrets JWT hardcodés en fallback | `config/jwt.js`, `routes/auth.js` | Fallbacks supprimés, variables d'environnement obligatoires |
+| 2 | Mot de passe DB hardcodé en fallback | `config/database.js`, `connectionManager.js`, `clinicProvisioningService.js`, `auth.js`, `public-consent-signing.js` | Tous les `\|\| 'medicalpro2024'` supprimés |
+| 3 | Injection de commandes shell (provisioning) | `clinicProvisioningService.js` | PGPASSWORD passé via `env` option de `execAsync()` au lieu d'interpolation shell |
+| 4 | Validation env vars au démarrage | `config/validateEnv.js` (nouveau) | Le serveur refuse de démarrer si `JWT_SECRET`, `JWT_REFRESH_SECRET` ou `DB_PASSWORD` manquent |
+| 5 | Endpoint non authentifié | `routes/auth.js` `/resend-invitation` | `authMiddleware` ajouté |
+| 6 | Brute-force 2FA sans rate limit | `routes/totp.js` `/validate` | Rate limiter: 5 tentatives / 15 min / IP |
+
+### Corrections HIGH — XSS (DOMPurify)
+
+| # | Fichier | Ligne | Correction |
+|---|---|---|---|
+| 1 | `ConsentSigningPage.js` | ~424 | `sanitizeHTML()` sur `dangerouslySetInnerHTML` |
+| 2 | `PatientDetailModal.js` | ~961 | `sanitizeHTML()` sur `dangerouslySetInnerHTML` |
+| 3 | `ConsentPreviewModal.js` | ~435 | `sanitizeHTML()` sur `dangerouslySetInnerHTML` |
+| 4 | `ConsentTemplatesModule.js` | ~969 | `sanitizeHTML()` sur `dangerouslySetInnerHTML` |
+
+### Corrections MEDIUM — XSS (autres)
+
+| # | Fichier | Correction |
+|---|---|---|
+| 1 | `ConsentTemplateEditorModal.js` | `sanitizeHTML()` sur l'aperçu du template |
+| 2 | `PDFPreviewModal.js` | `escapeHTML()` sur les valeurs interpolées (`clientName`, `description`, `conditions`, `purchaseOrderNumber`) |
+| 3 | `clear-storage.html` | `textContent` + DOM API au lieu de `innerHTML` |
+| 4 | `clear-session.html` | `textContent` + DOM API au lieu de `innerHTML` |
+
+### Corrections HIGH — Headers CSP & Sécurité
+
+| Couche | Correction |
+|---|---|
+| **Backend (Helmet)** | CSP restrictif pour l'API (`default-src 'none'`), HSTS preload, `frameguard: deny`, `Permissions-Policy`, `Referrer-Policy` |
+| **Nginx (3 server blocks)** | `Content-Security-Policy`, `Referrer-Policy`, `Permissions-Policy` ajoutés sur app, admin, et wildcard |
+
+### Corrections HIGH — httpOnly Cookies (JWT)
+
+Migration complète des JWT tokens de `localStorage` vers un système hybride sécurisé :
+- **Access token** → mémoire JavaScript uniquement (volatile, inaccessible si XSS)
+- **Refresh token** → cookie `httpOnly` (inaccessible via JavaScript)
+
+---
+
+## Corrections appliquées
+
+### 1. Validation des variables d'environnement au démarrage
+
+**Fichier :** `src/config/validateEnv.js` (nouveau)
+
+Le serveur refuse de démarrer si des variables critiques manquent :
+
 ```javascript
-// Backend: Valider le rôle depuis la BD
-const user = await User.findByPk(req.user.id);
-if (user.role !== req.user.role) {
-  throw new Error('Token tampering detected');
+// Variables obligatoires (le serveur ne démarre pas sans)
+JWT_SECRET          // Clé de signature JWT (min 32 caractères recommandé)
+JWT_REFRESH_SECRET  // Clé de signature du refresh token
+DB_PASSWORD         // Mot de passe PostgreSQL
+
+// Variable recommandée (warning si absente)
+TOTP_ENCRYPTION_KEY // Clé de chiffrement TOTP (doit différer de JWT_SECRET)
+```
+
+**Appel dans `server.js` :**
+```javascript
+require('dotenv').config();
+const { validateRequiredEnvVars } = require('./src/config/validateEnv');
+validateRequiredEnvVars(); // Fail-fast si manquant
+```
+
+### 2. Prévention de l'injection de commandes
+
+**Fichier :** `src/services/clinicProvisioningService.js`
+
+**Avant (vulnérable) :**
+```javascript
+// Le mot de passe est interpolé dans la commande shell
+await execAsync(`PGPASSWORD='${dbPassword}' psql -h ${dbHost} ...`);
+// Si dbPassword contient '; rm -rf / #, c'est exécuté!
+```
+
+**Après (sécurisé) :**
+```javascript
+// Helper qui passe le mot de passe via l'environnement du processus
+function execPsql(command, dbPassword) {
+  return execAsync(command, {
+    env: { ...process.env, PGPASSWORD: dbPassword }
+  });
+}
+
+// Le mot de passe n'est jamais dans la commande shell
+await execPsql(`psql -h ${dbHost} -U ${dbUser} -d ${dbName} ...`, dbPassword);
+```
+
+### 3. Sanitisation HTML (XSS)
+
+**Fichier :** `src/utils/sanitize.js` (frontend, nouveau)
+
+Deux fonctions de protection :
+
+```javascript
+import DOMPurify from 'dompurify';
+
+// Pour du contenu HTML riche (templates de consentement, etc.)
+export function sanitizeHTML(html) {
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['p', 'br', 'b', 'i', 'u', 'strong', 'em', 'span', 'div',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li',
+      'table', 'thead', 'tbody', 'tr', 'th', 'td',
+      'a', 'img', 'blockquote', 'pre', 'code', 'hr', 'sup', 'sub'],
+    ALLOWED_ATTR: ['class', 'style', 'href', 'src', 'alt', 'target', 'rel',
+      'colspan', 'rowspan'],
+    ALLOW_DATA_ATTR: false,
+  });
+}
+
+// Pour des valeurs texte interpolées dans des templates HTML
+export function escapeHTML(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 ```
 
-❌ **INTERDIT:**
-```javascript
-// Frontend: Faire confiance au localStorage
-const role = localStorage.getItem('user_role');
-if (role === 'admin') {
-  // ❌ DANGEREUX!
-}
+**Utilisation :**
+```jsx
+// Contenu riche (consentements, previews)
+<div dangerouslySetInnerHTML={{ __html: sanitizeHTML(content) }} />
+
+// Valeurs texte dans templates HTML (PDFs, factures)
+const html = `<td>${escapeHTML(item.description)}</td>`;
 ```
 
-### 2. Isolation Multi-Tenant
+### 4. Headers de sécurité (CSP)
 
-**RÈGLE:** Chaque requête vérifie que l'utilisateur opère sur sa propre clinique.
+#### Backend — Helmet.js (`server.js`)
 
-✅ **CORRECT:**
 ```javascript
-// Backend: Vérifier que companyId du JWT = companyId en BD
-const user = await User.findByPk(req.user.id, {
-  attributes: ['company_id']
-});
-
-if (user.company_id !== req.user.companyId) {
-  throw new ForbiddenException('Company mismatch');
-}
-
-// Requête avec WHERE clause sur companyId
-const patients = await Patient.findAll({
-  where: {
-    clinic_id: user.company_id  // ← Toujours filtrer!
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'none'"],      // API ne charge rien
+      frameAncestors: ["'none'"],  // API ne s'affiche pas dans un iframe
+    },
+  },
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+  frameguard: { action: 'deny' },
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  permissionsPolicy: {
+    features: { camera: [], microphone: [], geolocation: [], payment: [] }
   }
-});
+}));
 ```
 
-❌ **INTERDIT:**
-```javascript
-// Frontend modifie companyId dans le JWT
-const auth = localStorage.getItem('auth');
-auth.user.companyId = 'other_clinic_id';
+#### Nginx — Template (`scripts/production/nginx-multitenant.conf`)
 
-// Accès à d'autres données de clinique
+Headers ajoutés aux 3 server blocks (app, admin, wildcard) :
+
+```nginx
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
 ```
 
-### 3. Permission Checks au Backend
+> **Important :** Après mise à jour du template, copier vers `/etc/nginx/sites-available/medimaestro` sur le serveur de production et recharger : `nginx -t && systemctl reload nginx`.
 
-**RÈGLE:** JAMAIS faire confiance aux permissions du client.
+### 5. Cookies httpOnly (JWT Refresh Token)
 
-✅ **CORRECT:**
+#### Architecture avant/après
+
+```
+AVANT (vulnérable XSS) :
+┌─────────────┐     localStorage      ┌──────────────┐
+│  Frontend   │ ←──────────────────── │   Backend    │
+│             │  access_token          │              │
+│             │  refresh_token         │              │
+└─────────────┘  (lisible par JS)     └──────────────┘
+
+APRÈS (sécurisé) :
+┌─────────────┐     Mémoire JS        ┌──────────────┐
+│  Frontend   │ ←──────────────────── │   Backend    │
+│             │  access_token (body)   │              │
+│             │                        │              │
+│             │ ←─── httpOnly cookie ─ │              │
+│             │  refresh_token         │              │
+└─────────────┘  (invisible au JS)    └──────────────┘
+```
+
+#### Backend — Configuration des cookies (`routes/auth.js`)
+
 ```javascript
-// Backend: Vérifier les permissions depuis la BD
-const { requirePermission } = require('../middleware/permissions');
-
-router.post('/patients',
-  authMiddleware,
-  requirePermission('PATIENTS_CREATE'),  // ← Middleware
-  createPatient
-);
-
-// Ou dans le handler
-async function createPatient(req, res) {
-  // req.user.permissions contient les permissions validées
-  if (!req.user.permissions.includes('PATIENTS_CREATE')) {
-    return res.status(403).json({ error: 'Permission denied' });
-  }
-  // ...
+function setRefreshTokenCookie(res, refreshToken) {
+  res.cookie('refresh_token', refreshToken, {
+    httpOnly: true,                              // Inaccessible via JavaScript
+    secure: process.env.NODE_ENV === 'production', // HTTPS only en prod
+    sameSite: isProduction ? 'strict' : 'lax',   // Protection CSRF
+    path: '/api/v1/auth',                         // Envoyé uniquement aux routes auth
+    maxAge: 7 * 24 * 60 * 60 * 1000,             // 7 jours
+  });
 }
 ```
 
-❌ **INTERDIT:**
+**Flux modifiés :**
+
+| Endpoint | Modification |
+|---|---|
+| `POST /auth/login` | Access token dans le body, refresh token dans cookie httpOnly |
+| `POST /auth/refresh` | Lit le refresh token depuis le cookie (fallback: body). Rotation du refresh token à chaque appel. |
+| `POST /auth/logout` | `clearCookie('refresh_token')` pour invalider la session |
+
+#### Frontend — Stockage en mémoire (`api/baseClient.js`)
+
 ```javascript
-// Frontend décide si afficher le bouton (SEULEMENT pour l'affichage)
-const canCreate = localStorage.getItem('permissions')?.includes('PATIENTS_CREATE');
-if (canCreate) {
-  // ❌ API CALL SANS VÉRIFICATION BACKEND!
-  await api.post('/patients', data);
+// Variable module-level (mémoire volatile, pas localStorage)
+let _accessToken = null;
+
+export function setAccessToken(token) { _accessToken = token; }
+export function clearAccessToken() {
+  _accessToken = null;
+  localStorage.removeItem('clinicmanager_token'); // Nettoyage migration
+}
+function getAuthToken() {
+  if (_accessToken) return _accessToken;
+  // Migration: lecture unique depuis localStorage, puis nettoyage
+  const legacy = localStorage.getItem('clinicmanager_token');
+  if (legacy) {
+    _accessToken = legacy;
+    localStorage.removeItem('clinicmanager_token');
+    return _accessToken;
+  }
+  return null;
 }
 ```
 
-### 4. Authentification Forte
+**Toutes les requêtes `fetch()` incluent `credentials: 'include'`** pour envoyer le cookie httpOnly automatiquement.
 
-**RÈGLE:** Chaque requête valide le JWT et les données associées.
+#### Frontend — Restauration de session (`SecureAuthContext.js`)
 
-✅ **CORRECT:**
+Au chargement de la page, la session est restaurée via le cookie refresh :
+
 ```javascript
-// Backend: authMiddleware valide tout
-const authMiddleware = (req, res, next) => {
-  const token = extractToken(req);
-  const decoded = verifyAccessToken(token);  // ← Vérifier la signature
+// Pas de localStorage — le refresh token est dans le cookie httpOnly
+const response = await baseClient.post('/auth/refresh', {});
+// Le cookie est envoyé automatiquement grâce à credentials: 'include'
+// Le backend retourne un nouveau access token dans le body
+baseClient.setAccessToken(response.data.accessToken);
+```
 
-  if (isExpired(decoded)) {
-    return res.status(401).json({ error: 'Token expired' });
-  }
+---
 
-  req.user = decoded;
-  next();
+## Architecture de sécurité
+
+### Couches de protection
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    NGINX                             │
+│  • TLS 1.2/1.3 (HSTS preload)                      │
+│  • Rate limiting (10r/s API, 1r/s login)            │
+│  • CSP, X-Frame-Options, X-Content-Type-Options     │
+│  • Referrer-Policy, Permissions-Policy              │
+│  • Block .env, .git, dotfiles                       │
+└─────────────────────────────────────────────────────┘
+                         │
+┌─────────────────────────────────────────────────────┐
+│                  EXPRESS (Backend)                    │
+│  • Helmet.js (CSP, HSTS, frameguard)                │
+│  • cookie-parser (httpOnly refresh tokens)          │
+│  • CORS (origins whitelist + credentials)           │
+│  • Rate limiting (RateLimiterMemory)                │
+│  • Env validation au démarrage (fail-fast)          │
+└─────────────────────────────────────────────────────┘
+                         │
+┌─────────────────────────────────────────────────────┐
+│              AUTH MIDDLEWARE                          │
+│  • JWT signature verification                       │
+│  • User validation contre base CENTRALE             │
+│  • Company ID validation (anti-tampering)           │
+│  • Role validation (détection de tampering)         │
+│  • Membership check (multi-clinic)                  │
+└─────────────────────────────────────────────────────┘
+                         │
+┌─────────────────────────────────────────────────────┐
+│              ROUTES & HANDLERS                       │
+│  • Joi validation sur tous les inputs               │
+│  • Permission checks via clinic_roles               │
+│  • Audit logging des actions sensibles              │
+│  • Isolation multi-tenant (base de données séparée) │
+└─────────────────────────────────────────────────────┘
+                         │
+┌─────────────────────────────────────────────────────┐
+│              BASE DE DONNÉES                         │
+│  • PostgreSQL avec authentification md5             │
+│  • Base centrale (users, companies, subscriptions)  │
+│  • Bases cliniques isolées (1 par clinique)          │
+│  • Pas de mot de passe en fallback dans le code     │
+└─────────────────────────────────────────────────────┘
+```
+
+### Flux d'authentification
+
+```
+1. LOGIN
+   Client → POST /auth/login { email, password, [totpCode] }
+   Server → Valide credentials contre base centrale
+          → Vérifie 2FA si activé
+          → Génère access token (24h) + refresh token (7j)
+          → Retourne access token dans body JSON
+          → Set refresh token dans cookie httpOnly
+   Client → Stocke access token en mémoire (pas localStorage)
+
+2. REQUÊTE API
+   Client → GET /api/v1/patients
+            Header: Authorization: Bearer <access_token>
+            Cookie: refresh_token=<token> (envoyé automatiquement)
+   Server → authMiddleware valide le JWT
+          → clinicRoutingMiddleware isole la base clinique
+          → Handler retourne les données
+
+3. REFRESH
+   Client → POST /auth/refresh {}
+            Cookie: refresh_token=<token> (envoyé automatiquement)
+   Server → Lit refresh token depuis le cookie
+          → Valide le user en base centrale
+          → Génère nouveau access token + nouveau refresh token
+          → Retourne access token dans body
+          → Set nouveau refresh token dans cookie (rotation)
+   Client → Met à jour l'access token en mémoire
+
+4. LOGOUT
+   Client → POST /auth/logout
+   Server → clearCookie('refresh_token')
+   Client → clearAccessToken() (mémoire)
+          → Redirection vers login
+```
+
+---
+
+## Principes fondamentaux
+
+### 1. La vérité unique au backend
+
+Les rôles, permissions et données sensibles sont TOUJOURS validés côté serveur. Le frontend ne fait que de l'affichage conditionnel.
+
+```javascript
+// Backend : valider le rôle depuis la BD (pas le JWT)
+req.user = {
+  id: centralUser.id,
+  role: centralUser.role,        // De la BD, pas du JWT
+  companyId: jwtCompanyId,       // Validé contre la BD
+  email: centralUser.email,      // De la BD
 };
-
-// Chaque route protected appelle authMiddleware
-router.get('/patients', authMiddleware, getPatients);
 ```
+
+### 2. Isolation multi-tenant
+
+Chaque clinique a sa propre base de données PostgreSQL. L'accès est contrôlé par :
+- `clinicRoutingMiddleware` : résout la connexion à la bonne base clinique
+- Validation du `companyId` dans le JWT contre la base centrale
+- Vérification des `UserClinicMembership` pour les accès multi-cliniques
+
+### 3. Zéro secret dans le code
+
+- Aucun mot de passe, clé JWT ou secret en fallback dans le code source
+- Tous les secrets viennent de variables d'environnement
+- Le serveur refuse de démarrer si un secret obligatoire manque
+- Le fichier `.env` n'est jamais commité (`.gitignore`)
+
+### 4. Défense en profondeur
+
+Chaque couche ajoute sa propre protection :
+- **Nginx** : TLS, rate limiting, CSP, block dotfiles
+- **Express** : Helmet, CORS, cookies httpOnly, rate limiting applicatif
+- **Auth middleware** : validation JWT + validation base de données
+- **Handlers** : validation Joi, permission checks, audit logging
+- **Base de données** : isolation par base, pas de fallbacks
 
 ---
 
-## 🛡️ Patterns de Sécurité
+## Patterns de sécurité
 
-### Pattern 1: Permission Middleware
+### Pattern 1 : Utiliser `sanitizeHTML` pour tout contenu riche
 
-Utiliser le middleware `requirePermission()` pour toutes les routes sensibles:
+```jsx
+import { sanitizeHTML } from '../../utils/sanitize';
+
+// TOUJOURS sanitiser avant dangerouslySetInnerHTML
+<div dangerouslySetInnerHTML={{ __html: sanitizeHTML(content) }} />
+```
+
+### Pattern 2 : Utiliser `escapeHTML` pour les interpolations
 
 ```javascript
-// Backend: routes/patients.js
-const { requirePermission } = require('../middleware/permissions');
-const { PERMISSIONS } = require('../utils/permissionConstants');
+import { escapeHTML } from '../../utils/sanitize';
 
-// Créer patient
-router.post('/',
-  authMiddleware,
-  verifyCompanyContext,
-  requirePermission(PERMISSIONS.PATIENTS_CREATE),
-  createPatient
-);
+// TOUJOURS échapper les valeurs dans les templates HTML
+const html = `<td>${escapeHTML(userInput)}</td>`;
+```
 
-// Modifier patient
-router.put('/:id',
-  authMiddleware,
-  verifyCompanyContext,
-  requirePermission(PERMISSIONS.PATIENTS_EDIT),
-  updatePatient
-);
+### Pattern 3 : Ne jamais stocker de token en localStorage
 
-// Supprimer patient
-router.delete('/:id',
+```javascript
+// INTERDIT
+localStorage.setItem('token', accessToken);
+
+// CORRECT
+baseClient.setAccessToken(accessToken); // Mémoire volatile
+```
+
+### Pattern 4 : Passer les secrets via l'environnement du processus
+
+```javascript
+// INTERDIT — injection de commande possible
+execAsync(`PGPASSWORD='${password}' psql ...`);
+
+// CORRECT — le mot de passe est dans l'env du processus
+execAsync('psql ...', { env: { ...process.env, PGPASSWORD: password } });
+```
+
+### Pattern 5 : Permissions vérifiées au backend
+
+```javascript
+// Le frontend masque les boutons (UX) mais le backend DOIT vérifier
+router.delete('/patients/:id',
   authMiddleware,
-  verifyCompanyContext,
-  requirePermission(PERMISSIONS.PATIENTS_DELETE),
+  requirePermission('PATIENTS_DELETE'),
   deletePatient
 );
-
-// Voir patients (lecture)
-router.get('/',
-  authMiddleware,
-  verifyCompanyContext,
-  requirePermission(PERMISSIONS.PATIENTS_VIEW),
-  listPatients
-);
 ```
-
-### Pattern 2: Audit Logging
-
-Logger TOUTES les actions sensibles:
-
-```javascript
-// Backend: Dans les handlers
-const { logResourceCreated } = require('../services/auditService');
-
-async function createPatient(req, res) {
-  try {
-    // Créer le patient
-    const patient = await Patient.create({...});
-
-    // 🔐 Logger l'action
-    await logResourceCreated(
-      req.user.id,
-      req.user.companyId,
-      'Patient',
-      patient.id,
-      patient.toJSON(),
-      req.ip,
-      req.get('User-Agent')
-    );
-
-    res.json({ success: true, data: patient });
-  } catch (error) {
-    // Logger l'erreur aussi
-    await logResourceCreated(
-      req.user.id,
-      req.user.companyId,
-      'Patient',
-      null,
-      data,
-      req.ip,
-      req.get('User-Agent')
-    );
-    throw error;
-  }
-}
-```
-
-### Pattern 3: Validation des Inputs
-
-Valider TOUS les inputs avec Joi:
-
-```javascript
-// Backend: Schémas de validation
-const createPatientSchema = Joi.object({
-  firstName: Joi.string().min(1).max(100).required(),
-  lastName: Joi.string().min(1).max(100).required(),
-  email: Joi.string().email().required(),
-  phone: Joi.string().pattern(/^[\d\s\-\+\(\)]{7,20}$/).optional(),
-  dateOfBirth: Joi.date().iso().required(),
-  // ...
-});
-
-// Dans le handler
-async function createPatient(req, res) {
-  const { error, value } = createPatientSchema.validate(req.body);
-
-  if (error) {
-    return res.status(400).json({
-      success: false,
-      error: { message: 'Validation failed', details: error.message }
-    });
-  }
-
-  // Utiliser 'value' (les données validées), pas req.body
-  const patient = await Patient.create(value);
-  // ...
-}
-```
-
-### Pattern 4: Frontend - Permissions
-
-Utiliser `SecurePermissionGuard` pour l'affichage SEULEMENT:
-
-```javascript
-// Frontend: React component
-import { useAuth } from '../hooks/useAuth';
-import SecurePermissionGuard from '../components/auth/SecurePermissionGuard';
-
-function PatientsList() {
-  const { hasPermission } = useAuth();
-
-  // Affichage conditionnel (UNIQUEMENT pour UX)
-  return (
-    <>
-      {/* Bouton créer (visible ou pas) */}
-      <SecurePermissionGuard permission="PATIENTS_CREATE">
-        <button onClick={createPatient}>Créer Patient</button>
-      </SecurePermissionGuard>
-
-      {/* Données */}
-      <PatientTable
-        canEdit={hasPermission('PATIENTS_EDIT')}
-        canDelete={hasPermission('PATIENTS_DELETE')}
-      />
-    </>
-  );
-}
-```
-
-**IMPORTANT:** Même si le bouton n'est pas visible, le backend DOIT valider les permissions!
 
 ---
 
-## 📋 Checklist de Sécurité
+## Fichiers de configuration (.env)
+
+### Variables obligatoires
+
+| Variable | Description | Fichier de référence |
+|---|---|---|
+| `JWT_SECRET` | Clé de signature JWT (min 32 chars) | `.env.example` |
+| `JWT_REFRESH_SECRET` | Clé de signature refresh token | `.env.example` |
+| `DB_PASSWORD` | Mot de passe PostgreSQL | `.env.example` |
+
+### Variables recommandées
+
+| Variable | Description | Fallback |
+|---|---|---|
+| `TOTP_ENCRYPTION_KEY` | Clé de chiffrement des secrets TOTP | `JWT_SECRET` (warning) |
+| `CORS_ORIGIN` | Origins autorisés (comma-separated) | `http://localhost:3000` |
+| `FRONTEND_URL` | URL du frontend (pour emails) | `http://localhost:3000` |
+
+### Fichiers de référence
+
+| Fichier | Usage |
+|---|---|
+| `.env.example` | Template pour développement local |
+| `.env.production.example` | Template pour production (secrets via `/root/.secrets/`) |
+
+---
+
+## Checklist de sécurité
 
 ### Avant chaque commit
 
-- [ ] Toutes les routes sensibles ont `requirePermission()` middleware?
-- [ ] Les vérifications de `companyId` sont en place (multi-tenant)?
-- [ ] Les actions sensibles sont loggées en audit?
-- [ ] Les inputs sont validés avec Joi?
-- [ ] Les rôles/permissions ne sont pas hardcodés au frontend?
-- [ ] Pas de `eval()` ou `Function()` constructors?
-- [ ] Pas de données sensibles en localStorage (sauf JWT)?
-- [ ] Pas de SQL injections possibles (utiliser ORM)?
-- [ ] Pas de console.log() en production de données sensibles?
-- [ ] Les tests incluent des cas d'erreur d'authentification?
+- [ ] Pas de secrets hardcodés (grep `password`, `secret`, `key` dans le diff)
+- [ ] Tout `dangerouslySetInnerHTML` utilise `sanitizeHTML()`
+- [ ] Tout `innerHTML` dans les fichiers HTML utilise `textContent` ou `escapeHTML`
+- [ ] Pas de `localStorage` pour les tokens (utiliser `baseClient.setAccessToken`)
+- [ ] Les nouveaux endpoints ont `authMiddleware` + `requirePermission()`
+- [ ] Les inputs sont validés avec Joi
+- [ ] Pas d'interpolation de variables dans les commandes shell
+- [ ] Pas de `eval()` ou `Function()` constructors
 
-### Avant une release
+### Avant un déploiement en production
 
-- [ ] Audit logs sont testés et intacts?
-- [ ] Tous les 401/403 retournent les bons messages?
-- [ ] Rate limiting est activé?
-- [ ] CORS est configuré correctement?
-- [ ] JWT secret est sécurisé et long?
-- [ ] HTTPS est activé en production?
-- [ ] Les migrations DB sont testées?
-- [ ] Backup et DR plan existent?
+- [ ] `.env.production.example` est à jour avec toutes les variables
+- [ ] Les secrets sont dans `/root/.secrets/` (pas dans `.env`)
+- [ ] `TOTP_ENCRYPTION_KEY` est différent de `JWT_SECRET`
+- [ ] `CORS_ORIGIN` inclut tous les frontends (app + admin)
+- [ ] Le template Nginx est copié et rechargé
+- [ ] Les migrations sont appliquées sur la base centrale ET les bases cliniques
+- [ ] Rate limiting est activé (`RATE_LIMIT_MAX_REQUESTS`)
+- [ ] HTTPS est actif avec certificats valides
+- [ ] `X-Robots-Tag: noindex` est présent sur tous les server blocks
 
----
-
-## ⚠️ Erreurs Courantes
-
-### Erreur 1: Faire confiance aux données du client
-
-❌ **DANGEREUX:**
-```javascript
-router.get('/patients/:id', (req, res) => {
-  // Utilisateur modifie :id dans l'URL
-  const patient = await Patient.findByPk(req.params.id);
-  // ❌ Pas de vérification que patient.clinicId === req.user.companyId!
-  res.json(patient);
-});
-```
-
-✅ **CORRECT:**
-```javascript
-router.get('/patients/:id',
-  authMiddleware,
-  verifyCompanyContext,
-  async (req, res) => {
-    const patient = await Patient.findByPk(req.params.id);
-
-    // Vérifier que c'est la bonne clinique
-    if (patient.clinic_id !== req.user.validatedCompanyId) {
-      return res.status(404).json({ error: 'Not found' });
-    }
-
-    res.json(patient);
-  }
-);
-```
-
-### Erreur 2: Stocker des données sensibles en localStorage
-
-❌ **DANGEREUX:**
-```javascript
-// Frontend: localStorage contient la permission
-localStorage.setItem('can_delete_user', true);
-if (localStorage.getItem('can_delete_user')) {
-  // ❌ Utilisateur peut modifier localStorage!
-  await api.delete('/users/123');
-}
-```
-
-✅ **CORRECT:**
-```javascript
-// Frontend: État vient du backend
-const { permissions } = useSecureAuth();
-
-const canDelete = permissions.includes('USERS_DELETE');
-if (canDelete) {
-  // API call s'ajoute le Authorization header
-  // Backend valide la permission NOUVEAU
-  await api.delete('/users/123');
-}
-```
-
-### Erreur 3: Permissions non-cohérentes
-
-❌ **DANGEREUX:**
-```javascript
-// Frontend a une liste de permissions
-const PERMISSIONS = {
-  CREATE_PATIENT: 'create_patient',
-  EDIT_PATIENT: 'edit_patient'
-};
-
-// Backend a une autre liste
-const PERMISSIONS = {
-  PATIENTS_CREATE: 'patients.create',
-  PATIENTS_EDIT: 'patients.edit'
-};
-// ❌ Décalage → bugs de sécurité!
-```
-
-✅ **CORRECT:**
-```javascript
-// Backend: Source unique (permissionConstants.js)
-const PERMISSIONS = { ... };
-
-// Frontend: Importe depuis le backend
-// Ou reçoit les permissions via API /auth/me
-```
-
----
-
-## 🔍 Tester la Sécurité
-
-### Script: Essayer de modifier son rôle
-
-```javascript
-// Dans la console du navigateur
-const auth = JSON.parse(localStorage.getItem('clinicmanager_auth'));
-auth.user.role = 'super_admin';
-localStorage.setItem('clinicmanager_auth', JSON.stringify(auth));
-
-// Appeler l'API pour voir si elle est bloquée
-fetch('/api/v1/users', {
-  method: 'GET',
-  headers: {
-    'Authorization': 'Bearer ' + localStorage.getItem('clinicmanager_token')
-  }
-})
-.then(r => r.json())
-.then(data => console.log(data));
-
-// ✅ CORRECT: Erreur 403 Permission Denied
-// ❌ DANGEREUX: Données retournées
-```
-
-### Script: Tester l'isolation multi-tenant
-
-```javascript
-// Modifier companyId
-const auth = JSON.parse(localStorage.getItem('clinicmanager_auth'));
-auth.user.companyId = 'other_clinic_id';
-localStorage.setItem('clinicmanager_auth', JSON.stringify(auth));
-
-// Tenter d'accéder aux patients
-fetch('/api/v1/patients', {
-  method: 'GET',
-  headers: {
-    'Authorization': 'Bearer ' + localStorage.getItem('clinicmanager_token')
-  }
-})
-.then(r => r.json())
-.then(data => console.log(data));
-
-// ✅ CORRECT: Erreur 403 Forbidden
-// ❌ DANGEREUX: Patients d'une autre clinique
-```
-
-### Script: Vérifier l'audit logging
+### Déploiement du template Nginx mis à jour
 
 ```bash
-# SSH vers le serveur
-psql -h localhost -U medicalpro -d medicalpro_central << EOF
-  SELECT * FROM audit_logs
-  WHERE user_id = 'user_uuid'
-  ORDER BY timestamp DESC
-  LIMIT 20;
-EOF
+# Sur le serveur de production
+ssh -p 2222 root@72.62.51.173
+
+# Copier le template mis à jour
+cp /var/www/medical-pro-backend/scripts/production/nginx-multitenant.conf \
+   /etc/nginx/sites-available/medimaestro
+
+# Vérifier la syntaxe et recharger
+nginx -t && systemctl reload nginx
 ```
 
 ---
 
-## 📞 Support et Questions
+## Tests de sécurité
 
-Pour toute question ou signalement de faille: contactez l'équipe de sécurité.
+### Test : les tokens ne sont plus dans localStorage
 
-**IMPORTANT:** Documenter toute dérogation à ces principes et faire approuver par l'équipe de sécurité.
+```javascript
+// Console du navigateur (après login)
+console.log(localStorage.getItem('clinicmanager_token')); // null
+console.log(localStorage.getItem('clinicmanager_auth'));   // null
+// Le token est uniquement en mémoire JavaScript — invisible aux outils XSS
+```
+
+### Test : le cookie refresh est httpOnly
+
+```javascript
+// Console du navigateur
+console.log(document.cookie); // Le refresh_token N'APPARAÎT PAS
+// Car il est httpOnly — JavaScript ne peut pas y accéder
+```
+
+### Test : la session survit au rechargement de page
+
+```
+1. Se connecter
+2. Recharger la page (F5)
+3. Vérifier que la session est restaurée (via POST /auth/refresh avec le cookie)
+```
+
+### Test : les headers CSP sont présents
+
+```bash
+# Vérifier les headers
+curl -sI https://app.medimaestro.com | grep -i 'content-security\|strict-transport\|x-frame\|permissions-policy\|referrer-policy'
+```
+
+### Test : validation env vars
+
+```bash
+# Démarrer le backend sans JWT_SECRET → doit refuser
+JWT_SECRET= node server.js
+# FATAL: Missing required environment variables:
+#   - JWT_SECRET: JWT signing secret (min 32 chars recommended)
+```
+
+### Test : tampering du JWT
+
+```javascript
+// Modifier le rôle dans le JWT → doit être rejeté
+const jwt = require('jsonwebtoken');
+const payload = jwt.decode(token);
+payload.role = 'super_admin';
+const fakeToken = jwt.sign(payload, 'wrong-secret');
+// Résultat : 401 TOKEN_INVALID
+```

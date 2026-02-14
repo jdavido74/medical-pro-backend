@@ -1,7 +1,13 @@
 require('dotenv').config();
+
+// Validate required environment variables BEFORE anything else
+const { validateRequiredEnvVars } = require('./src/config/validateEnv');
+validateRequiredEnvVars();
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const cookieParser = require('cookie-parser');
 const morgan = require('morgan');
 const compression = require('compression');
 const path = require('path');
@@ -105,15 +111,37 @@ const rateLimitMiddleware = async (req, res, next) => {
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
+      defaultSrc: ["'none'"],
+      scriptSrc: ["'none'"],
+      styleSrc: ["'none'"],
+      imgSrc: ["'none'"],
+      connectSrc: ["'none'"],
+      fontSrc: ["'none'"],
       objectSrc: ["'none'"],
-      upgradeInsecureRequests: [],
+      frameAncestors: ["'none'"],
+      baseUri: ["'none'"],
+      formAction: ["'none'"],
     },
   },
-  referrerPolicy: { policy: "same-origin" }
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  },
+  frameguard: { action: 'deny' },
+  permissionsPolicy: {
+    features: {
+      camera: [],
+      microphone: [],
+      geolocation: [],
+      payment: []
+    }
+  }
 }));
+
+// Cookie parser (for httpOnly refresh token cookies)
+app.use(cookieParser());
 
 // CORS configuration - Handle both single and multiple origins
 const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
