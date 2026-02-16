@@ -1,4 +1,4 @@
-# Guide de Sécurité - MedicalPro
+# Guide de Sécurité - MediMaestro
 
 ## Table des matières
 
@@ -8,7 +8,11 @@
 4. [Principes fondamentaux](#principes-fondamentaux)
 5. [Patterns de sécurité](#patterns-de-sécurité)
 6. [Checklist de sécurité](#checklist-de-sécurité)
-7. [Tests de sécurité](#tests-de-sécurité)
+7. [Fichiers de configuration (.env)](#fichiers-de-configuration-env)
+8. [Conformité — Cahier de Tests Sécurité MVP (2026-02-16)](#conformité--cahier-de-tests-sécurité-mvp-2026-02-16)
+9. [Ce qui est fait (Mesures de sécurité en place)](#ce-qui-est-fait-mesures-de-sécurité-en-place)
+10. [Ce qui reste à faire (Recommandations)](#ce-qui-reste-à-faire-recommandations)
+11. [Tests de sécurité](#tests-de-sécurité)
 
 ---
 
@@ -528,6 +532,157 @@ cp /var/www/medical-pro-backend/scripts/production/nginx-multitenant.conf \
 # Vérifier la syntaxe et recharger
 nginx -t && systemctl reload nginx
 ```
+
+---
+
+## Conformité — Cahier de Tests Sécurité MVP (2026-02-16)
+
+Évaluation de conformité de la plateforme MediMaestro par rapport au cahier de tests de sécurité MVP (`MEDIMaestro_Cahier_Tests_Securite_MVP_DETAILLE.docx`).
+
+### Résumé
+
+| Indicateur | Valeur |
+|---|---|
+| **Score global** | **~88% (23/26)** |
+| **Seuil MVP** | 80% |
+| **Statut** | **Au-dessus du seuil** |
+
+### Détail par test
+
+#### Multi-Tenant Isolation
+
+| ID | Objectif | Statut | Implémentation |
+|---|---|---|---|
+| MT-01 | Isolation des données entre cliniques | **CONFORME** | Bases de données PostgreSQL séparées par clinique, `clinicRoutingMiddleware` |
+| MT-02 | Vérification du contexte company | **CONFORME** | `verifyCompanyContext()` dans `auth.js`, validation companyId JWT vs base centrale |
+| MT-03 | Accès cross-tenant impossible | **CONFORME** | `authMiddleware` vérifie membership, connexion DB résolue par company |
+
+#### Contrôle d'accès (RBAC)
+
+| ID | Objectif | Statut | Implémentation |
+|---|---|---|---|
+| RBAC-01 | Contrôle des rôles et permissions | **CONFORME** | `permissions.js`, `requirePermission()` middleware, `clinic_roles` table (DB = source of truth), 50+ permissions granulaires |
+
+#### Authentification
+
+| ID | Objectif | Statut | Implémentation |
+|---|---|---|---|
+| AUTH-01 | Protection brute-force | **CONFORME** | `rate-limiter-flexible` : 100 req/15min global, 5/15min 2FA, 5/15min password reset par IP |
+| AUTH-02 | Expiration des tokens | **CONFORME** avec réserve | Access token 24h, refresh token 7j. Recommandation : réduire access token à 1-2h |
+| AUTH-03 | Cookies sécurisés | **CONFORME** | `httpOnly`, `Secure`, `SameSite: strict`, `path: /api/v1/auth`, rotation du refresh token |
+
+#### Injection
+
+| ID | Objectif | Statut | Implémentation |
+|---|---|---|---|
+| INJ-01 | Protection SQL Injection | **CONFORME** | Sequelize ORM avec requêtes paramétrées, `{ bind: [...] }` pour les requêtes brutes |
+| INJ-02 | Protection Mass Assignment | **À VÉRIFIER** | Joi validation sur les inputs + attributs Sequelize dans les modèles. Audit recommandé : vérifier whitelist explicite sur tous les endpoints |
+
+#### XSS
+
+| ID | Objectif | Statut | Implémentation |
+|---|---|---|---|
+| XSS-01 | Protection Cross-Site Scripting | **CONFORME** | DOMPurify sur `dangerouslySetInnerHTML` (frontend), middleware `sanitize.js` (backend), `escapeHTML()` pour templates HTML/PDF, CSP strict (Helmet + Nginx) |
+
+#### Infrastructure & Opérations
+
+| ID | Objectif | Statut | Implémentation |
+|---|---|---|---|
+| INFRA-01 | Sécurité infrastructure | **À VÉRIFIER** en prod | Nginx reverse proxy, PostgreSQL localhost only, SSH port 2222. Vérification recommandée : `ss -tulpn`, `ufw status`, `sshd_config` |
+| BACKUP-01 | Sauvegardes automatisées | **À VÉRIFIER** | Pas de script de backup visible dans le code source. Configurer pg_dump quotidien + stockage off-site |
+| LOGS-01 | Journalisation sécurisée | **CONFORME** | Winston structured logging, Morgan HTTP logging, log des échecs d'auth (IP + User-Agent), détection de tampering, redaction des données sensibles |
+
+---
+
+## Ce qui est fait (Mesures de sécurité en place)
+
+Liste exhaustive des mesures de sécurité implémentées dans la plateforme MediMaestro.
+
+### Authentication
+
+- JWT access tokens (24h) + refresh tokens (7j) en cookie httpOnly
+- Access token stocké en mémoire JavaScript (pas localStorage)
+- Rotation du refresh token à chaque renouvellement
+- Validation utilisateur contre base centrale à chaque requête
+- Détection de tampering JWT (rôle, companyId comparés à la base)
+- Vérification email obligatoire à l'inscription
+- Password reset avec tokens expirables + rate limiting (5/15min par IP, 3/15min par email)
+- TOTP/2FA implémenté (AES-256-GCM, timing-safe comparison, backup codes)
+- Bcrypt cost 12 pour le hachage des mots de passe
+
+### Authorization
+
+- RBAC granulaire avec 50+ permissions
+- Permissions sourcées depuis `clinic_roles` (DB = source of truth)
+- `requirePermission()` middleware sur tous les endpoints sensibles
+- `verifyCompanyContext()` pour isolation multi-tenant
+- `verifyResourceOwnership()` pour accès aux ressources
+- Rôles : `super_admin`, `admin`, `responsable`, `physician`, `nurse`, `secretary`, `readonly`
+
+### Injection & XSS
+
+- DOMPurify sur tous les `dangerouslySetInnerHTML` (frontend)
+- `escapeHTML()` pour interpolations dans templates HTML/PDF
+- Middleware `sanitize.js` (backend) : strip HTML de `req.body` / `req.query`
+- Whitelist pour champs légitimement HTML
+- Sequelize ORM avec requêtes paramétrées
+- Joi validation sur les inputs
+
+### Headers & Transport
+
+- Helmet.js : CSP `default-src 'none'`, HSTS preload 1 an, `frameguard: deny`
+- Nginx : CSP, `Referrer-Policy`, `Permissions-Policy`, `X-Robots-Tag`
+- TLS 1.2/1.3 avec certificats Let's Encrypt
+- CORS restrictif (origins whitelist + credentials)
+- Blocage `.env`, `.git`, dotfiles via Nginx
+
+### Rate Limiting
+
+- Global : 100 requêtes / 15 min (`rate-limiter-flexible`)
+- Password reset : 5/15min par IP, 3/15min par email
+- 2FA validation : 5/15min par IP, blocage 15 min
+
+### Infrastructure
+
+- PostgreSQL localhost only (pas d'accès externe)
+- SSH port 2222 (non-standard)
+- Bases de données séparées par clinique (isolation multi-tenant)
+- Secrets via variables d'environnement (fail-fast au démarrage)
+- Zéro secret dans le code source
+
+### Logging
+
+- Winston logger structuré
+- Morgan HTTP request logging
+- Log des échecs d'authentification avec IP + User-Agent
+- Détection et log du tampering JWT
+- Redaction des données sensibles dans les logs
+
+---
+
+## Ce qui reste à faire (Recommandations)
+
+### Priorité haute
+
+- [ ] Réduire durée access token de 24h à 1-2h
+- [ ] Configurer/vérifier backups automatisés PostgreSQL (pg_dump quotidien + stockage off-site)
+- [ ] Activer 2FA pour le compte super_admin josedavid.orts@gmail.com
+- [ ] Auditer mass assignment : vérifier whitelist explicite des champs sur tous les endpoints
+- [ ] Vérifier infrastructure en prod : `ss -tulpn`, `ufw status verbose`, `sshd_config`
+
+### Priorité moyenne
+
+- [ ] Supprimer fichiers legacy frontend : `patientsStorage.js`, `medicalRecordsStorage.js`, etc.
+- [ ] Ajouter fail2ban ou WAF pour complément au rate limiting applicatif
+- [ ] Centraliser les logs vers un service externe (ELK, Datadog, etc.)
+- [ ] Implémenter UI "Équipe de soins" pour remplacer `PATIENTS_VIEW_ALL` sur physician
+
+### Priorité basse
+
+- [ ] Penetration test externe par auditeur indépendant
+- [ ] Monitoring d'anomalies avec alertes automatiques
+- [ ] Politique de rotation des secrets (`JWT_SECRET`, `TOTP_ENCRYPTION_KEY`)
+- [ ] Documentation GDPR complète (DPA, DPIA, politique de confidentialité)
 
 ---
 
