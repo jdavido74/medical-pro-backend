@@ -51,7 +51,7 @@ const User = sequelize.define('User', {
     allowNull: false,
     defaultValue: 'admin',
     validate: {
-      isIn: [['super_admin', 'admin', 'support', 'physician', 'practitioner', 'secretary', 'readonly']]
+      isIn: [['super_admin', 'admin', 'support', 'physician', 'practitioner', 'nurse', 'secretary', 'readonly']]
     }
   },
   permissions: {

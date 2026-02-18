@@ -1896,7 +1896,7 @@ router.post('/set-password', async (req, res) => {
         }, { transaction: centralTransaction });
       } else {
         // Create new central user — preserve the clinic role
-        const validCentralRoles = ['super_admin', 'admin', 'support', 'physician', 'practitioner', 'secretary', 'readonly'];
+        const validCentralRoles = ['super_admin', 'admin', 'support', 'physician', 'practitioner', 'nurse', 'secretary', 'readonly'];
         const centralRole = validCentralRoles.includes(provider.role) ? provider.role : 'admin';
 
         centralUser = await User.create({

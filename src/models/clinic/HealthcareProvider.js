@@ -102,7 +102,7 @@ function createHealthcareProviderModel(clinicDb) {
       allowNull: false,
       defaultValue: 'practitioner',
       validate: {
-        isIn: [['physician', 'practitioner', 'secretary', 'readonly', 'admin', 'super_admin']]
+        isIn: [['physician', 'practitioner', 'nurse', 'secretary', 'readonly', 'admin', 'super_admin']]
       }
     },
     // administrative_role = optional cumulative administrative function

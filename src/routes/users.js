@@ -26,7 +26,7 @@ const createUserSchema = Joi.object({
   password: Joi.string().min(8).required(),
   firstName: Joi.string().max(100).optional(),
   lastName: Joi.string().max(100).optional(),
-  role: Joi.string().valid('admin', 'physician', 'practitioner', 'secretary', 'readonly').required(),
+  role: Joi.string().valid('admin', 'physician', 'practitioner', 'nurse', 'secretary', 'readonly').required(),
   permissions: Joi.object().optional(),
   isActive: Joi.boolean().default(true)
 });
@@ -36,7 +36,7 @@ const updateUserSchema = Joi.object({
   password: Joi.string().min(8).optional(),
   firstName: Joi.string().max(100).optional(),
   lastName: Joi.string().max(100).optional(),
-  role: Joi.string().valid('admin', 'physician', 'practitioner', 'secretary', 'readonly').optional(),
+  role: Joi.string().valid('admin', 'physician', 'practitioner', 'nurse', 'secretary', 'readonly').optional(),
   permissions: Joi.object().optional(),
   isActive: Joi.boolean().optional()
 }).min(1);
@@ -45,7 +45,7 @@ const usersQuerySchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
   search: Joi.string().allow('').max(255).optional(),
-  role: Joi.string().valid('admin', 'physician', 'practitioner', 'secretary', 'readonly').optional(),
+  role: Joi.string().valid('admin', 'physician', 'practitioner', 'nurse', 'secretary', 'readonly').optional(),
   isActive: Joi.string().valid('true', 'false').optional()
 });
 

@@ -56,7 +56,9 @@ const NEW_MIGRATIONS = [
   'clinic_056_consent_variable_substitution.sql',
   'clinic_057_physician_patients_view_all.sql',
   'clinic_058_current_illness_field.sql',
-  'clinic_059_prescription_clinical_context.sql'
+  'clinic_059_prescription_clinical_context.sql',
+  'clinic_060_custom_medications.sql',
+  'clinic_061_admin_medical_nurse_role.sql'
 ];
 
 async function getClinicDatabases() {

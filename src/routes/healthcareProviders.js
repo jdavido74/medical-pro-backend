@@ -343,7 +343,7 @@ router.post('/', async (req, res) => {
     // ============================================================
     if (!value.send_invitation && hashedPassword) {
       try {
-        const validRoles = ['super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly'];
+        const validRoles = ['super_admin', 'admin', 'physician', 'practitioner', 'nurse', 'secretary', 'readonly'];
         const centralRole = validRoles.includes(value.role) ? value.role : 'practitioner';
 
         // Vérifier si un user central existe déjà avec cet email

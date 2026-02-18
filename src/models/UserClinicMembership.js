@@ -104,7 +104,7 @@ module.exports = (sequelize) => {
       defaultValue: 'practitioner',
       validate: {
         // Standardized roles
-        isIn: [['super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly']]
+        isIn: [['super_admin', 'admin', 'physician', 'practitioner', 'nurse', 'secretary', 'readonly']]
       }
     },
     is_primary: {

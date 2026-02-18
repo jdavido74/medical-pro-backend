@@ -197,6 +197,10 @@ class ClinicProvisioningService {
         'clinic_058_current_illness_field.sql',
         // Prescription clinical context snapshot columns
         'clinic_059_prescription_clinical_context.sql',
+        // Custom medications (CIMA integration)
+        'clinic_060_custom_medications.sql',
+        // Admin medical permissions + nurse role
+        'clinic_061_admin_medical_nurse_role.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];

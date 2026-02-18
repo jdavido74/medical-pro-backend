@@ -77,7 +77,7 @@ module.exports.createHealthcareProviderSchema = Joi.object({
   // Rôles standardisés: physician (médecins), practitioner (autres soignants), secretary, readonly
   // Rôles système: super_admin, admin
   role: Joi.string()
-    .valid('super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly')
+    .valid('super_admin', 'admin', 'physician', 'practitioner', 'nurse', 'secretary', 'readonly')
     .required()
     .messages({
       'any.required': 'Le rôle est obligatoire / El rol es obligatorio',
@@ -133,7 +133,7 @@ module.exports.updateHealthcareProviderSchema = Joi.object({
 
   // Role and permissions (standardized)
   role: Joi.string()
-    .valid('super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly')
+    .valid('super_admin', 'admin', 'physician', 'practitioner', 'nurse', 'secretary', 'readonly')
     .optional(),
   administrative_role: Joi.string()
     .valid('direction', 'clinic_admin', 'hr', 'billing')
@@ -369,7 +369,7 @@ module.exports.queryParamsSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
   search: Joi.string().max(255).allow('').optional(),
-  role: Joi.string().valid('super_admin', 'admin', 'physician', 'practitioner', 'secretary', 'readonly').optional(),
+  role: Joi.string().valid('super_admin', 'admin', 'physician', 'practitioner', 'nurse', 'secretary', 'readonly').optional(),
   is_active: Joi.boolean().optional(),
   include_deleted: Joi.boolean().optional().default(false)
 });
