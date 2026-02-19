@@ -31,7 +31,17 @@ const createPrescriptionSchema = Joi.object({
     route: Joi.string().valid('oral', 'iv', 'im', 'topical', 'inhaled', 'sublingual', 'rectal').default('oral'),
     duration: Joi.string().allow('').optional(),
     quantity: Joi.string().allow('').optional(),
-    instructions: Joi.string().allow('').optional()
+    instructions: Joi.string().allow('').optional(),
+    // CIMA metadata (all optional for backward compatibility)
+    source: Joi.string().valid('cima', 'custom').allow(null).optional(),
+    nregistro: Joi.string().allow(null, '').optional(),
+    atcCode: Joi.string().allow(null, '').optional(),
+    activeIngredients: Joi.array().items(Joi.object({
+      name: Joi.string(), amount: Joi.string().allow(''), unit: Joi.string().allow('')
+    })).allow(null).optional(),
+    pharmaceuticalForm: Joi.string().allow(null, '').optional(),
+    requiresPrescription: Joi.boolean().allow(null).optional(),
+    customMedicationId: Joi.string().uuid().allow(null).optional()
   })).required(),
   instructions: Joi.string().allow('', null).optional(),
   additional_notes: Joi.string().allow('', null).optional(),
@@ -59,7 +69,17 @@ const updatePrescriptionSchema = Joi.object({
     route: Joi.string().valid('oral', 'iv', 'im', 'topical', 'inhaled', 'sublingual', 'rectal').default('oral'),
     duration: Joi.string().optional(),
     quantity: Joi.string().optional(),
-    instructions: Joi.string().optional()
+    instructions: Joi.string().optional(),
+    // CIMA metadata (all optional for backward compatibility)
+    source: Joi.string().valid('cima', 'custom').allow(null).optional(),
+    nregistro: Joi.string().allow(null, '').optional(),
+    atcCode: Joi.string().allow(null, '').optional(),
+    activeIngredients: Joi.array().items(Joi.object({
+      name: Joi.string(), amount: Joi.string().allow(''), unit: Joi.string().allow('')
+    })).allow(null).optional(),
+    pharmaceuticalForm: Joi.string().allow(null, '').optional(),
+    requiresPrescription: Joi.boolean().allow(null).optional(),
+    customMedicationId: Joi.string().uuid().allow(null).optional()
   })).optional(),
   instructions: Joi.string().allow('').optional(),
   additional_notes: Joi.string().allow('').optional(),

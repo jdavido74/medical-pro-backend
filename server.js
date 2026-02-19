@@ -39,6 +39,7 @@ const consentRoutes = require('./src/routes/consents');
 const consentTemplateRoutes = require('./src/routes/consent-templates');
 const medicalRecordsRoutes = require('./src/routes/medical-records');
 const prescriptionsRoutes = require('./src/routes/prescriptions');
+const medicationsRoutes = require('./src/routes/medications');
 const consentSigningRoutes = require('./src/routes/consent-signing');
 
 // Public routes (no authentication)
@@ -229,6 +230,7 @@ app.use(`/api/${API_VERSION}/consents`, authMiddleware, clinicRoutingMiddleware,
 app.use(`/api/${API_VERSION}/consent-templates`, authMiddleware, clinicRoutingMiddleware, consentTemplateRoutes);
 app.use(`/api/${API_VERSION}/medical-records`, authMiddleware, clinicRoutingMiddleware, medicalRecordsRoutes);
 app.use(`/api/${API_VERSION}/prescriptions`, authMiddleware, clinicRoutingMiddleware, prescriptionsRoutes);
+app.use(`/api/${API_VERSION}/medications`, authMiddleware, clinicRoutingMiddleware, medicationsRoutes);
 app.use(`/api/${API_VERSION}/consent-signing`, authMiddleware, clinicRoutingMiddleware, consentSigningRoutes);
 
 // Clinic configuration API routes (all use clinic-specific databases)
