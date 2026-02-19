@@ -339,7 +339,22 @@ module.exports.createMedicalRecordSchema = Joi.object({
     heart_rate: Joi.number().min(0).max(300).optional(),
     temperature: Joi.number().min(30).max(45).optional(),
     respiratory_rate: Joi.number().min(0).max(100).optional(),
-    oxygen_saturation: Joi.number().min(0).max(100).optional()
+    oxygen_saturation: Joi.number().min(0).max(100).optional(),
+    blood_glucose: Joi.number().min(0).max(1000).optional(),
+    additional_readings: Joi.array().items(Joi.object({
+      timestamp: Joi.string().allow('', null).optional(),
+      treatment_id: Joi.string().allow('', null).optional(),
+      treatment_name: Joi.string().allow('', null).optional(),
+      blood_pressure: Joi.object({
+        systolic: Joi.number().min(0).max(300).optional(),
+        diastolic: Joi.number().min(0).max(200).optional()
+      }).optional(),
+      heart_rate: Joi.number().min(0).max(300).optional(),
+      temperature: Joi.number().min(30).max(45).optional(),
+      oxygen_saturation: Joi.number().min(0).max(100).optional(),
+      blood_glucose: Joi.number().min(0).max(1000).optional(),
+      observations: Joi.string().max(2000).allow('', null).optional()
+    })).optional()
   }).optional(),
 
   // Medical history (antecedents)
@@ -385,7 +400,10 @@ module.exports.createMedicalRecordSchema = Joi.object({
     prescribed_by: Joi.string().allow('', null).optional(),
     notes: Joi.string().allow('', null).optional(),
     catalog_item_id: Joi.string().allow('', null).optional(),
-    catalog_item_type: Joi.string().allow('', null).optional()
+    catalog_item_type: Joi.string().allow('', null).optional(),
+    origin: Joi.string().valid('appointment', 'added', 'modified').allow('', null).optional(),
+    appointment_item_id: Joi.string().allow('', null).optional(),
+    original_medication: Joi.string().allow('', null).optional()
   })).optional(),
 
   // Treatment plan (all fields optional and can be empty)
@@ -410,7 +428,11 @@ module.exports.createMedicalRecordSchema = Joi.object({
 
   // Notes
   notes: Joi.string().max(5000).allow('', null).optional(),
-  private_notes: Joi.string().max(5000).allow('', null).optional()
+  private_notes: Joi.string().max(5000).allow('', null).optional(),
+
+  // Appointment link for treatment sync
+  appointment_id: Joi.string().uuid().allow(null).optional(),
+  original_treatments: Joi.array().allow(null).optional()
 });
 
 module.exports.updateMedicalRecordSchema = Joi.object({
@@ -441,7 +463,11 @@ module.exports.updateMedicalRecordSchema = Joi.object({
   blood_type: Joi.string().valid('A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-').allow('', null).optional(),
   notes: Joi.string().max(5000).allow('', null).optional(),
   private_notes: Joi.string().max(5000).allow('', null).optional(),
-  provider_id: Joi.string().uuid().optional()
+  provider_id: Joi.string().uuid().optional(),
+
+  // Appointment link for treatment sync
+  appointment_id: Joi.string().uuid().allow(null).optional(),
+  original_treatments: Joi.array().allow(null).optional()
 }).min(1);
 
 module.exports.createConsentSchema = Joi.object({

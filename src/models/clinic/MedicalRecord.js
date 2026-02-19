@@ -273,6 +273,26 @@ function createMedicalRecordModel(clinicDb) {
         model: 'healthcare_providers',
         key: 'id'
       }
+    },
+
+    // Link to appointment (for treatment sync)
+    appointment_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'appointments',
+        key: 'id'
+      },
+      onDelete: 'SET NULL',
+      comment: 'Rendez-vous associé pour la synchronisation des traitements'
+    },
+
+    // Snapshot of original appointment treatments (for diff on save)
+    original_treatments: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      defaultValue: null,
+      comment: 'Snapshot des traitements initiaux du RDV pour détection des modifications'
     }
   }, {
     tableName: 'medical_records',
@@ -286,7 +306,8 @@ function createMedicalRecordModel(clinicDb) {
       { fields: ['created_at'] },
       { fields: ['archived'] },
       { fields: ['patient_id', 'created_at'] },
-      { fields: ['record_number'], unique: true }
+      { fields: ['record_number'], unique: true },
+      { fields: ['appointment_id'] }
     ],
     hooks: {
       beforeValidate: (record, opts) => {

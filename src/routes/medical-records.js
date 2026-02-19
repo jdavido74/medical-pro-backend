@@ -19,6 +19,57 @@ const { getPermissionsFromClinicRoles } = require('../middleware/permissions');
 const router = express.Router();
 
 /**
+ * Sync treatments back to appointment_items
+ * Compares current treatments with original_treatments snapshot to update statuses
+ */
+async function syncTreatmentsToAppointment(clinicDb, appointmentId, treatments, originalTreatments) {
+  if (!appointmentId || !originalTreatments || !Array.isArray(treatments)) return;
+
+  try {
+    const AppointmentItem = await getModel(clinicDb, 'AppointmentItem');
+
+    // Build a map of current treatments by appointment_item_id
+    const currentByItemId = {};
+    for (const t of treatments) {
+      if (t.appointment_item_id) {
+        currentByItemId[t.appointment_item_id] = t;
+      }
+    }
+
+    // Check each original treatment
+    for (const orig of originalTreatments) {
+      if (!orig.appointment_item_id) continue;
+
+      const current = currentByItemId[orig.appointment_item_id];
+
+      if (!current) {
+        // Treatment was removed → mark as refused
+        await AppointmentItem.update(
+          { status: 'refused' },
+          { where: { id: orig.appointment_item_id } }
+        );
+      } else if (current.medication !== orig.medication) {
+        // Medication was changed → mark as completed (modified)
+        await AppointmentItem.update(
+          { status: 'completed' },
+          { where: { id: orig.appointment_item_id } }
+        );
+      } else {
+        // Unchanged → mark as accepted
+        await AppointmentItem.update(
+          { status: 'accepted' },
+          { where: { id: orig.appointment_item_id } }
+        );
+      }
+    }
+
+    console.log(`[MedicalRecords] ✅ Synced treatments to appointment ${appointmentId}`);
+  } catch (error) {
+    console.error('[MedicalRecords] Error syncing treatments to appointment:', error.message);
+  }
+}
+
+/**
  * Helper: Get healthcare_provider.id from central user id
  */
 async function getProviderIdFromUser(clinicDb, centralUserId) {
@@ -68,6 +119,83 @@ async function logRecordAccess(record, action, user, req, details = {}) {
     console.error('[MedicalRecords] Error logging access:', error.message);
   }
 }
+
+/**
+ * GET /appointment/:appointmentId/treatments
+ * Load treatments from an appointment for pre-filling a medical record
+ * Requires: medical_records.view permission
+ */
+router.get('/appointment/:appointmentId/treatments', async (req, res, next) => {
+  try {
+    if (!await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_VIEW)) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Accès refusé' }
+      });
+    }
+
+    const { appointmentId } = req.params;
+
+    // Load the appointment with its main service
+    const Appointment = await getModel(req.clinicDb, 'Appointment');
+    const ProductService = await getModel(req.clinicDb, 'ProductService');
+    const AppointmentItem = await getModel(req.clinicDb, 'AppointmentItem');
+
+    const appointment = await Appointment.findByPk(appointmentId, {
+      include: [
+        { model: ProductService, as: 'service', attributes: ['id', 'name', 'type'] }
+      ]
+    });
+
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Rendez-vous non trouvé' }
+      });
+    }
+
+    const treatments = [];
+
+    // Add main service as a treatment
+    if (appointment.service) {
+      treatments.push({
+        medication: appointment.service.name,
+        catalog_item_id: appointment.service.id,
+        catalog_item_type: appointment.service.type || 'service',
+        origin: 'appointment',
+        appointment_item_id: null,
+        status: 'active'
+      });
+    }
+
+    // Load appointment items with their product/service info
+    const items = await AppointmentItem.findAll({
+      where: { appointment_id: appointmentId },
+      include: [
+        { model: ProductService, as: 'productService', attributes: ['id', 'name', 'type'] }
+      ]
+    });
+
+    for (const item of items) {
+      treatments.push({
+        medication: item.productService?.name || 'Unknown',
+        catalog_item_id: item.product_service_id,
+        catalog_item_type: item.productService?.type || 'service',
+        origin: 'appointment',
+        appointment_item_id: item.id,
+        status: item.status === 'proposed' ? 'active' : item.status
+      });
+    }
+
+    res.json({
+      success: true,
+      data: treatments
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] GET /appointment/:appointmentId/treatments error:', error);
+    next(error);
+  }
+});
 
 /**
  * GET /
@@ -388,6 +516,11 @@ router.post('/', async (req, res, next) => {
     // Create record
     const record = await MedicalRecord.create(data);
 
+    // Sync treatments back to appointment if linked
+    if (data.appointment_id && data.original_treatments) {
+      await syncTreatmentsToAppointment(req.clinicDb, data.appointment_id, data.treatments, data.original_treatments);
+    }
+
     console.log(`[MedicalRecords] ✅ Created record ${record.id} for patient ${data.patient_id}`);
 
     res.status(201).json({
@@ -460,6 +593,13 @@ router.put('/:id', async (req, res, next) => {
 
     // Update record
     await record.update(data);
+
+    // Sync treatments back to appointment if linked
+    const appointmentId = data.appointment_id || record.appointment_id;
+    const originalTreatments = data.original_treatments || record.original_treatments;
+    if (appointmentId && originalTreatments) {
+      await syncTreatmentsToAppointment(req.clinicDb, appointmentId, data.treatments || record.treatments, originalTreatments);
+    }
 
     // Log access
     await logRecordAccess(record, 'update', req.user, req, { fields: Object.keys(data) });

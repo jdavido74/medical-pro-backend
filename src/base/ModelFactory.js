@@ -32,6 +32,7 @@ const createClinicScheduledJob = require('../models/clinic/ScheduledJob');
 const createClinicTreatmentConsentTemplate = require('../models/clinic/TreatmentConsentTemplate');
 const createClinicSystemCategory = require('../models/clinic/SystemCategory');
 const createClinicCustomMedication = require('../models/clinic/CustomMedication');
+const createClinicAppointmentItem = require('../models/clinic/AppointmentItem');
 
 // Billing models
 const createClinicDocument = require('../models/clinic/Document');
@@ -70,6 +71,7 @@ const CLINIC_MODEL_FACTORIES = {
   TreatmentConsentTemplate: createClinicTreatmentConsentTemplate,
   SystemCategory: createClinicSystemCategory,
   CustomMedication: createClinicCustomMedication,
+  AppointmentItem: createClinicAppointmentItem,
   // Billing models
   Document: createClinicDocument,
   DocumentItem: createClinicDocumentItem,
@@ -533,6 +535,38 @@ async function setupAssociations(clinicDb, modelName, model, dbModels) {
           model.belongsTo(dbModels.Document, {
             foreignKey: 'document_id',
             as: 'document'
+          });
+        }
+        break;
+
+      case 'AppointmentItem':
+        // AppointmentItem belongs to Appointment
+        if (!dbModels.Appointment) {
+          const Appointment = CLINIC_MODEL_FACTORIES.Appointment(clinicDb);
+          dbModels.Appointment = Appointment;
+        }
+        if (!model.associations?.appointment) {
+          model.belongsTo(dbModels.Appointment, {
+            foreignKey: 'appointment_id',
+            as: 'appointment'
+          });
+        }
+        // AppointmentItem belongs to ProductService
+        if (!dbModels.ProductService) {
+          const ProductService = CLINIC_MODEL_FACTORIES.ProductService(clinicDb);
+          dbModels.ProductService = ProductService;
+        }
+        if (!model.associations?.productService) {
+          model.belongsTo(dbModels.ProductService, {
+            foreignKey: 'product_service_id',
+            as: 'productService'
+          });
+        }
+        // Set up reverse association on Appointment
+        if (!dbModels.Appointment.associations?.items) {
+          dbModels.Appointment.hasMany(model, {
+            foreignKey: 'appointment_id',
+            as: 'items'
           });
         }
         break;
