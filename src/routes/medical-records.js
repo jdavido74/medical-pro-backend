@@ -198,6 +198,220 @@ router.get('/appointment/:appointmentId/treatments', async (req, res, next) => {
 });
 
 /**
+ * POST /vitals
+ * Find-or-create a medical record for today and save vital signs
+ * - No existing record today → create new with appointment treatments
+ * - Same appointment_id → append to additional_readings
+ * - Different appointment_id → return 409 for user decision
+ * - use_existing_record_id → append to that record
+ * - force_create → create new record regardless
+ * Requires: medical_notes.create or medical_records.edit permission
+ */
+const vitalsSchema = Joi.object({
+  patient_id: Joi.string().uuid().required(),
+  appointment_id: Joi.string().uuid().required(),
+  vital_signs: Joi.object().required(),
+  use_existing_record_id: Joi.string().uuid().optional(),
+  force_create: Joi.boolean().optional()
+});
+
+router.post('/vitals', async (req, res, next) => {
+  try {
+    const canCreate = await hasPermission(req, PERMISSIONS.MEDICAL_NOTES_CREATE) ||
+                      await hasPermission(req, PERMISSIONS.MEDICAL_RECORDS_EDIT);
+    if (!canCreate) {
+      return res.status(403).json({
+        success: false,
+        error: { message: 'Accès refusé' }
+      });
+    }
+
+    const { error, value: data } = vitalsSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Données invalides', details: error.details.map(d => d.message).join(', ') }
+      });
+    }
+
+    const { patient_id, appointment_id, vital_signs, use_existing_record_id, force_create } = data;
+    const MedicalRecord = await getModel(req.clinicDb, 'MedicalRecord');
+
+    // --- Helper: load treatments from appointment ---
+    async function getAppointmentTreatments(apptId) {
+      const Appointment = await getModel(req.clinicDb, 'Appointment');
+      const ProductService = await getModel(req.clinicDb, 'ProductService');
+      const AppointmentItem = await getModel(req.clinicDb, 'AppointmentItem');
+
+      const appointment = await Appointment.findByPk(apptId, {
+        include: [{ model: ProductService, as: 'service', attributes: ['id', 'name', 'type'] }]
+      });
+      if (!appointment) return [];
+
+      const treatments = [];
+      if (appointment.service) {
+        treatments.push({
+          medication: appointment.service.name,
+          catalog_item_id: appointment.service.id,
+          catalog_item_type: appointment.service.type || 'service',
+          origin: 'appointment',
+          appointment_item_id: null,
+          status: 'active'
+        });
+      }
+
+      const items = await AppointmentItem.findAll({
+        where: { appointment_id: apptId },
+        include: [{ model: ProductService, as: 'productService', attributes: ['id', 'name', 'type'] }]
+      });
+      for (const item of items) {
+        treatments.push({
+          medication: item.productService?.name || 'Unknown',
+          catalog_item_id: item.product_service_id,
+          catalog_item_type: item.productService?.type || 'service',
+          origin: 'appointment',
+          appointment_item_id: item.id,
+          status: item.status === 'proposed' ? 'active' : item.status
+        });
+      }
+      return treatments;
+    }
+
+    // --- Helper: build a reading object ---
+    function buildReading(vs) {
+      return {
+        timestamp: new Date().toISOString(),
+        appointment_id,
+        ...vs
+      };
+    }
+
+    // --- Helper: create a new record with vitals + treatments ---
+    async function createNewRecord() {
+      const treatments = await getAppointmentTreatments(appointment_id);
+
+      // Auto-fill facility_id
+      let facility_id = null;
+      try {
+        const [facilities] = await req.clinicDb.query(
+          `SELECT id FROM medical_facilities WHERE is_active = true LIMIT 1`
+        );
+        facility_id = facilities?.[0]?.id || req.user.companyId || null;
+      } catch (err) {
+        facility_id = req.user.companyId || null;
+      }
+
+      // Get provider
+      const providerId = await getProviderIdFromUser(req.clinicDb, req.user?.id);
+
+      const clientIP = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+      const recordData = {
+        patient_id,
+        appointment_id,
+        facility_id,
+        provider_id: providerId,
+        created_by: providerId || req.user?.id,
+        record_type: 'consultation',
+        vital_signs,
+        treatments: treatments.length > 0 ? treatments : undefined,
+        original_treatments: treatments.length > 0 ? treatments : undefined,
+        access_log: [{
+          action: 'create',
+          userId: req.user?.id || 'unknown',
+          timestamp: new Date().toISOString(),
+          ipAddress: clientIP
+        }]
+      };
+
+      const record = await MedicalRecord.create(recordData);
+      console.log(`[MedicalRecords] ✅ POST /vitals — Created record ${record.id} for patient ${patient_id}`);
+      return record;
+    }
+
+    // --- Helper: append vitals to existing record ---
+    async function appendToRecord(record) {
+      const currentVS = record.vital_signs || {};
+      const readings = currentVS.additional_readings || [];
+      readings.push(buildReading(vital_signs));
+
+      const updatedVS = { ...currentVS, additional_readings: readings };
+      await record.update({ vital_signs: updatedVS });
+      await logRecordAccess(record, 'update', req.user, req, { fields: ['vital_signs'] });
+
+      console.log(`[MedicalRecords] ✅ POST /vitals — Appended reading to record ${record.id} (${readings.length} readings total)`);
+      return record;
+    }
+
+    // --- Option A: force_create ---
+    if (force_create) {
+      const record = await createNewRecord();
+      return res.status(201).json({ success: true, action: 'created', data: record });
+    }
+
+    // --- Option B: use_existing_record_id ---
+    if (use_existing_record_id) {
+      const existingRecord = await MedicalRecord.findByPk(use_existing_record_id);
+      if (!existingRecord || existingRecord.archived || existingRecord.is_locked) {
+        return res.status(404).json({
+          success: false,
+          error: { message: 'Dossier existant non trouvé ou verrouillé' }
+        });
+      }
+      const record = await appendToRecord(existingRecord);
+      return res.json({ success: true, action: 'appended', data: record });
+    }
+
+    // --- Find existing record(s) for this patient today ---
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfNextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+
+    const existingRecords = await MedicalRecord.findAll({
+      where: {
+        patient_id,
+        archived: false,
+        is_locked: false,
+        consultation_date: {
+          [Op.gte]: startOfDay,
+          [Op.lt]: startOfNextDay
+        }
+      },
+      order: [['consultation_date', 'DESC']]
+    });
+
+    // --- Case 1: No existing record → create ---
+    if (existingRecords.length === 0) {
+      const record = await createNewRecord();
+      return res.status(201).json({ success: true, action: 'created', data: record });
+    }
+
+    // --- Case 2: Record exists with same appointment_id → append ---
+    const sameApptRecord = existingRecords.find(r => r.appointment_id === appointment_id);
+    if (sameApptRecord) {
+      const record = await appendToRecord(sameApptRecord);
+      return res.json({ success: true, action: 'appended', data: record });
+    }
+
+    // --- Case 3: Record exists but different appointment → 409 conflict ---
+    const conflictRecord = existingRecords[0];
+    return res.status(409).json({
+      success: false,
+      action: 'conflict',
+      existingRecord: {
+        id: conflictRecord.id,
+        appointment_id: conflictRecord.appointment_id,
+        consultation_date: conflictRecord.consultation_date,
+        record_type: conflictRecord.record_type,
+        vital_signs: conflictRecord.vital_signs
+      }
+    });
+  } catch (error) {
+    console.error('[MedicalRecords] POST /vitals error:', error);
+    next(error);
+  }
+});
+
+/**
  * GET /
  * Retrieve all medical records with pagination and filters
  * Requires: medical_records.view permission

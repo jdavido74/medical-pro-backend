@@ -341,6 +341,9 @@ module.exports.createMedicalRecordSchema = Joi.object({
     respiratory_rate: Joi.number().min(0).max(100).optional(),
     oxygen_saturation: Joi.number().min(0).max(100).optional(),
     blood_glucose: Joi.number().min(0).max(1000).optional(),
+    treatment_id: Joi.string().allow('', null).optional(),
+    treatment_name: Joi.string().allow('', null).optional(),
+    observations: Joi.string().max(2000).allow('', null).optional(),
     additional_readings: Joi.array().items(Joi.object({
       timestamp: Joi.string().allow('', null).optional(),
       treatment_id: Joi.string().allow('', null).optional(),
