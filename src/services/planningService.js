@@ -208,49 +208,42 @@ async function getPractitionerAvailability(clinicDb, providerId, date) {
     const PractitionerWeeklyAvailability = await getModel(clinicDb, 'PractitionerWeeklyAvailability');
     const dayOfWeek = getDayOfWeek(date);
 
-    const availability = await PractitionerWeeklyAvailability.findOne({
+    // Compute ISO week/year from date
+    const dateObj = new Date(date);
+    const d = new Date(Date.UTC(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const year = d.getUTCFullYear();
+    const week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+
+    const record = await PractitionerWeeklyAvailability.findOne({
       where: {
-        practitioner_id: providerId,
-        day_of_week: dayOfWeek,
-        is_active: true
+        provider_id: providerId,
+        year,
+        week_number: week
       }
     });
 
-    if (!availability) {
+    if (!record || !record.availability) {
       // Fall back to clinic hours
       const clinicHours = await getClinicHours(clinicDb, date);
       return clinicHours ? [clinicHours] : [];
     }
 
-    // Parse time slots from availability
-    const slots = [];
-    if (availability.start_time && availability.end_time) {
-      slots.push({
-        start: availability.start_time.substring(0, 5),
-        end: availability.end_time.substring(0, 5)
-      });
+    // Extract day-specific availability from the JSONB field
+    const dayAvailability = record.availability[dayOfWeek];
+    if (!dayAvailability || !dayAvailability.enabled || !dayAvailability.slots || dayAvailability.slots.length === 0) {
+      // Day is disabled or has no slots — fall back to clinic hours
+      const clinicHours = await getClinicHours(clinicDb, date);
+      return clinicHours ? [clinicHours] : [];
     }
 
-    // Handle break time
-    if (availability.break_start && availability.break_end) {
-      const breakStart = availability.break_start.substring(0, 5);
-      const breakEnd = availability.break_end.substring(0, 5);
-
-      // Split around break
-      if (slots.length > 0) {
-        const original = slots[0];
-        slots.length = 0;
-
-        if (timeToMinutes(original.start) < timeToMinutes(breakStart)) {
-          slots.push({ start: original.start, end: breakStart });
-        }
-        if (timeToMinutes(breakEnd) < timeToMinutes(original.end)) {
-          slots.push({ start: breakEnd, end: original.end });
-        }
-      }
-    }
-
-    return slots;
+    // Convert JSONB slots { start, end } to the expected format
+    return dayAvailability.slots.map(slot => ({
+      start: slot.start,
+      end: slot.end
+    }));
   } catch (error) {
     console.error('[planningService] Error getting practitioner availability:', error);
     // Fall back to clinic hours
