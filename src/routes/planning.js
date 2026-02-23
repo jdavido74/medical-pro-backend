@@ -185,6 +185,7 @@ const transformAppointment = (apt) => {
  * GET /planning/slots - Get available time slots
  */
 router.get('/slots', async (req, res) => {
+  const t0 = Date.now();
   try {
     const { error, value } = getSlotsSchema.validate(req.query);
     if (error) {
@@ -195,6 +196,7 @@ router.get('/slots', async (req, res) => {
     }
 
     const { date, category, treatmentId, providerId, duration, allowAfterHours } = value;
+    console.log(`[planning] GET /slots date=${date} category=${category} treatmentId=${treatmentId} duration=${duration} afterHours=${allowAfterHours}`);
 
     let result;
 
@@ -206,12 +208,13 @@ router.get('/slots', async (req, res) => {
       result = await planningService.getAllSlots(req.clinicDb, date, { category, treatmentId, providerId });
     }
 
+    console.log(`[planning] GET /slots done in ${Date.now() - t0}ms, slots: ${result?.slots?.length ?? 'N/A'}`);
     res.json({
       success: true,
       data: result
     });
   } catch (error) {
-    console.error('[planning] Error getting slots:', error);
+    console.error(`[planning] Error getting slots (${Date.now() - t0}ms):`, error);
     res.status(500).json({
       success: false,
       error: { message: error.message || 'Failed to get available slots' }
@@ -845,6 +848,7 @@ router.get('/treatments', async (req, res) => {
  * POST /planning/slots/multi-treatment - Get available slots for multiple treatments
  */
 router.post('/slots/multi-treatment', async (req, res) => {
+  const t0 = Date.now();
   try {
     const { error, value } = getMultiTreatmentSlotsSchema.validate(req.body);
     if (error) {
@@ -855,14 +859,16 @@ router.post('/slots/multi-treatment', async (req, res) => {
     }
 
     const { date, treatments, allowAfterHours } = value;
+    console.log(`[planning] POST /slots/multi-treatment date=${date} treatments=${treatments.length} afterHours=${allowAfterHours}`);
     const result = await planningService.getMultiTreatmentSlots(req.clinicDb, date, treatments, { allowAfterHours });
 
+    console.log(`[planning] POST /slots/multi-treatment done in ${Date.now() - t0}ms, slots: ${result?.slots?.length ?? 'N/A'}`);
     res.json({
       success: true,
       data: result
     });
   } catch (error) {
-    console.error('[planning] Error getting multi-treatment slots:', error);
+    console.error(`[planning] Error getting multi-treatment slots (${Date.now() - t0}ms):`, error);
     res.status(500).json({
       success: false,
       error: { message: error.message || 'Failed to get multi-treatment slots' }
@@ -1027,6 +1033,7 @@ router.post('/appointments/multi-treatment', async (req, res) => {
 router.get('/appointments/group/:groupId', async (req, res) => {
   try {
     const { groupId } = req.params;
+    console.log(`[planning] GET /appointments/group/${groupId}`);
 
     const Appointment = await getModel(req.clinicDb, 'Appointment');
     const Patient = await getModel(req.clinicDb, 'Patient');
