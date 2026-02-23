@@ -429,6 +429,9 @@ module.exports.createMedicalRecordSchema = Joi.object({
   // Blood type
   blood_type: Joi.string().valid('A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-').allow('', null).optional(),
 
+  // Evolution notes
+  evolution: Joi.string().max(10000).allow('', null).optional(),
+
   // Notes
   notes: Joi.string().max(5000).allow('', null).optional(),
   private_notes: Joi.string().max(5000).allow('', null).optional(),
@@ -464,6 +467,7 @@ module.exports.updateMedicalRecordSchema = Joi.object({
   treatment_plan: Joi.object().optional(),
   current_medications: Joi.array().optional(),
   blood_type: Joi.string().valid('A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-').allow('', null).optional(),
+  evolution: Joi.string().max(10000).allow('', null).optional(),
   notes: Joi.string().max(5000).allow('', null).optional(),
   private_notes: Joi.string().max(5000).allow('', null).optional(),
   provider_id: Joi.string().uuid().optional(),

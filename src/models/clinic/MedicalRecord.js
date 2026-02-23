@@ -202,6 +202,13 @@ function createMedicalRecordModel(clinicDb) {
       }
     },
 
+    // Evolution notes (free-text clinical evolution)
+    evolution: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      comment: 'Notes d\'évolution clinique du patient'
+    },
+
     // Notes
     notes: {
       type: DataTypes.TEXT,

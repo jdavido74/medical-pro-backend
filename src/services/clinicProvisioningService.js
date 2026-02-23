@@ -203,6 +203,8 @@ class ClinicProvisioningService {
         'clinic_061_admin_medical_nurse_role.sql',
         // Vitals glycemia + appointment link on medical records
         'clinic_062_vitals_glycemia_appointment_link.sql',
+        // Evolution notes on medical records
+        'clinic_063_add_evolution_to_medical_records.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];
