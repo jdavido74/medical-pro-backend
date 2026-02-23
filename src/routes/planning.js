@@ -54,7 +54,8 @@ const getSlotsSchema = Joi.object({
   category: Joi.string().valid('treatment', 'consultation').optional(),
   treatmentId: Joi.string().uuid().optional(),
   providerId: Joi.string().uuid().optional(),
-  duration: Joi.number().integer().min(5).max(480).optional()
+  duration: Joi.number().integer().min(5).max(480).optional(),
+  allowAfterHours: Joi.boolean().optional().default(false)
 });
 
 const getCalendarSchema = Joi.object({
@@ -75,7 +76,8 @@ const getMultiTreatmentSlotsSchema = Joi.object({
       treatmentId: Joi.string().uuid().required(),
       duration: Joi.number().integer().min(5).max(480).required()
     })
-  ).min(1).max(10).required()
+  ).min(1).max(10).required(),
+  allowAfterHours: Joi.boolean().optional().default(false)
 });
 
 const createMultiTreatmentSchema = Joi.object({
@@ -192,12 +194,12 @@ router.get('/slots', async (req, res) => {
       });
     }
 
-    const { date, category, treatmentId, providerId, duration } = value;
+    const { date, category, treatmentId, providerId, duration, allowAfterHours } = value;
 
     let result;
 
     if (category === 'treatment' && treatmentId) {
-      result = await planningService.getTreatmentSlots(req.clinicDb, treatmentId, date, duration);
+      result = await planningService.getTreatmentSlots(req.clinicDb, treatmentId, date, duration, { allowAfterHours });
     } else if (category === 'consultation' && providerId) {
       result = await planningService.getConsultationSlots(req.clinicDb, providerId, date, duration || 30);
     } else {
@@ -827,8 +829,8 @@ router.post('/slots/multi-treatment', async (req, res) => {
       });
     }
 
-    const { date, treatments } = value;
-    const result = await planningService.getMultiTreatmentSlots(req.clinicDb, date, treatments);
+    const { date, treatments, allowAfterHours } = value;
+    const result = await planningService.getMultiTreatmentSlots(req.clinicDb, date, treatments, { allowAfterHours });
 
     res.json({
       success: true,

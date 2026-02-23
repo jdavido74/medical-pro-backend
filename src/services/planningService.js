@@ -306,6 +306,19 @@ async function getExistingAppointments(clinicDb, resourceType, resourceId, date)
 }
 
 /**
+ * Extend the last range's closing time by the given number of minutes (for after-hours slots)
+ */
+function extendRangesAfterHours(ranges, extraMinutes) {
+  if (!ranges || ranges.length === 0) return ranges;
+  const extended = ranges.map(r => ({ ...r }));
+  const last = extended[extended.length - 1];
+  const closeKey = last.close !== undefined ? 'close' : 'end';
+  const closeMinutes = timeToMinutes(last[closeKey]);
+  last[closeKey] = minutesToTime(closeMinutes + extraMinutes);
+  return extended;
+}
+
+/**
  * Calculate available slots by removing booked slots from available ranges
  */
 function calculateAvailableSlots(availableRanges, bookedSlots, slotDuration) {
@@ -337,7 +350,7 @@ function calculateAvailableSlots(availableRanges, bookedSlots, slotDuration) {
  * @param {number} duration - Appointment duration in minutes (optional, uses treatment duration)
  * @returns {Array} Array of available slots with machine info
  */
-async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
+async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null, options = {}) {
   // Load ProductService first to ensure associations are set up
   const ProductService = await getModel(clinicDb, 'ProductService');
   // Then load Machine which will set up the reverse associations
@@ -361,15 +374,22 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
       return { slots: [], machines: [], message: 'Clinic closed on this date', isOverlappable: true };
     }
 
+    // Extend closing time if after-hours requested
+    const extendedRanges = options.allowAfterHours
+      ? extendRangesAfterHours(clinicRanges, 180)
+      : clinicRanges;
+    const originalClose = clinicRanges[clinicRanges.length - 1].close;
+
     // Generate slots from clinic hours (no machine blocking)
-    const availableSlots = calculateAvailableSlots(clinicRanges, [], slotDuration);
+    const availableSlots = calculateAvailableSlots(extendedRanges, [], slotDuration);
     const slots = availableSlots.map(slot => ({
       ...slot,
       machineId: null, // No machine for overlappable treatments
       machineName: null,
       machineColor: null,
       duration: slotDuration,
-      isOverlappable: true
+      isOverlappable: true,
+      afterHours: timeToMinutes(slot.end) > timeToMinutes(originalClose)
     }));
 
     return {
@@ -437,15 +457,21 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
       return { slots: [], machines: [], message: 'Clinic closed on this date' };
     }
 
+    const extendedRanges2 = options.allowAfterHours
+      ? extendRangesAfterHours(clinicRanges, 180)
+      : clinicRanges;
+    const originalClose2 = clinicRanges[clinicRanges.length - 1].close;
+
     const bookedSlots = [];
-    const availableSlots = calculateAvailableSlots(clinicRanges, bookedSlots, slotDuration);
+    const availableSlots = calculateAvailableSlots(extendedRanges2, bookedSlots, slotDuration);
     const slots = availableSlots.map(slot => ({
       ...slot,
       machineId: null,
       machineName: null,
       machineColor: null,
       duration: slotDuration,
-      isOverlappable: false
+      isOverlappable: false,
+      afterHours: timeToMinutes(slot.end) > timeToMinutes(originalClose2)
     }));
 
     return {
@@ -468,6 +494,12 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
     };
   }
 
+  // Determine original closing time for afterHours marking
+  const clinicRangesForClose = await getClinicHoursRanges(clinicDb, date);
+  const originalCloseTime = clinicRangesForClose && clinicRangesForClose.length > 0
+    ? clinicRangesForClose[clinicRangesForClose.length - 1].close
+    : '23:59';
+
   const allSlots = [];
   const machineInfo = [];
 
@@ -475,6 +507,11 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
     // Get machine availability
     const availability = await getMachineAvailability(clinicDb, machine.id, date);
     if (availability.length === 0) continue;
+
+    // Extend availability if after-hours requested
+    const extendedAvailability = options.allowAfterHours
+      ? extendRangesAfterHours(availability, 180)
+      : availability;
 
     // Get existing appointments for this machine (only non-overlappable ones block)
     const bookedSlots = await getExistingAppointments(clinicDb, 'machine', machine.id, date);
@@ -485,7 +522,7 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
     console.log(`  Booked slots (non-cancelled):`, bookedSlots.map(b => `${b.start}-${b.end}`).join(', ') || 'none');
 
     // Calculate available slots
-    const availableSlots = calculateAvailableSlots(availability, bookedSlots, slotDuration);
+    const availableSlots = calculateAvailableSlots(extendedAvailability, bookedSlots, slotDuration);
     console.log(`  Available ${slotDuration}min slots:`, availableSlots.length);
 
     // Add machine info to each slot
@@ -495,7 +532,8 @@ async function getTreatmentSlots(clinicDb, treatmentId, date, duration = null) {
         machineId: machine.id,
         machineName: machine.name,
         machineColor: machine.color,
-        duration: slotDuration
+        duration: slotDuration,
+        afterHours: timeToMinutes(slot.end) > timeToMinutes(originalCloseTime)
       });
     }
 
@@ -643,19 +681,20 @@ async function getAllSlots(clinicDb, date, filters = {}) {
  * @param {Array} treatments - Array of { treatmentId, duration } objects
  * @returns {Object} Available multi-treatment slots with segments
  */
-async function getMultiTreatmentSlots(clinicDb, date, treatments) {
+async function getMultiTreatmentSlots(clinicDb, date, treatments, options = {}) {
   if (!treatments || treatments.length === 0) {
     return { slots: [], totalDuration: 0 };
   }
 
   // If only one treatment, use the standard function
   if (treatments.length === 1) {
-    const result = await getTreatmentSlots(clinicDb, treatments[0].treatmentId, date, treatments[0].duration);
+    const result = await getTreatmentSlots(clinicDb, treatments[0].treatmentId, date, treatments[0].duration, options);
     return {
       slots: result.slots.map(slot => ({
         startTime: slot.start,
         endTime: slot.end,
         totalDuration: slot.duration,
+        afterHours: slot.afterHours || false,
         segments: [{
           treatmentId: treatments[0].treatmentId,
           machineId: slot.machineId,
@@ -799,7 +838,8 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
 
   // Generate potential start times (every 15 minutes during clinic hours)
   const startMinutes = timeToMinutes(clinicHours.open);
-  const endMinutes = timeToMinutes(clinicHours.close);
+  const originalEndMinutes = timeToMinutes(clinicHours.close);
+  const endMinutes = options.allowAfterHours ? originalEndMinutes + 180 : originalEndMinutes;
   const slotInterval = 15; // Check every 15 minutes
 
   const validSlots = [];
@@ -875,7 +915,8 @@ async function getMultiTreatmentSlots(clinicDb, date, treatments) {
         startTime: minutesToTime(currentStart),
         endTime: minutesToTime(currentStart + totalDuration),
         totalDuration,
-        segments
+        segments,
+        afterHours: (currentStart + totalDuration) > originalEndMinutes
       });
     }
   }
