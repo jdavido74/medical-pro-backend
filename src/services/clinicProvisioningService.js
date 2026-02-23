@@ -201,6 +201,8 @@ class ClinicProvisioningService {
         'clinic_060_custom_medications.sql',
         // Admin medical permissions + nurse role
         'clinic_061_admin_medical_nurse_role.sql',
+        // Vitals glycemia + appointment link on medical records
+        'clinic_062_vitals_glycemia_appointment_link.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];
