@@ -558,6 +558,31 @@ router.put('/appointments/:id', async (req, res) => {
       }
     }
 
+    // Check provider conflicts when date/time/provider changes
+    if (req.body.date || req.body.startTime || req.body.providerId) {
+      const effectiveProviderId = updateData.provider_id || appointment.provider_id;
+      const effectiveDate = updateData.appointment_date || appointment.appointment_date;
+      const effectiveStart = updateData.start_time || appointment.start_time?.substring(0, 5);
+      const effectiveEnd = updateData.end_time || appointment.end_time?.substring(0, 5);
+
+      if (effectiveProviderId && effectiveStart && effectiveEnd) {
+        const providerConflict = await planningService.checkProviderConflicts(
+          req.clinicDb, effectiveProviderId, effectiveDate, effectiveStart, effectiveEnd, id
+        );
+        const shouldBlock = providerConflict.hasConsultationConflict ||
+          (appointment.category === 'consultation' && providerConflict.hasTreatmentConflict);
+        if (shouldBlock) {
+          return res.status(409).json({
+            success: false,
+            error: {
+              message: 'Provider is not available at this time',
+              conflicts: providerConflict.conflicts
+            }
+          });
+        }
+      }
+    }
+
     await appointment.update(updateData);
 
     // Reload with associations
@@ -900,6 +925,25 @@ router.post('/appointments/multi-treatment', async (req, res) => {
         }
       }
 
+      // Check provider conflicts (multi-treatment is always category 'treatment', so only consultations block)
+      const segmentProviderId = treatment.providerId || groupProviderId;
+      if (segmentProviderId) {
+        const providerConflict = await planningService.checkProviderConflicts(
+          req.clinicDb, segmentProviderId, date, segmentStartTime, segmentEndTime
+        );
+        if (providerConflict.hasConsultationConflict) {
+          await transaction.rollback();
+          return res.status(409).json({
+            success: false,
+            error: {
+              message: `Provider conflict for treatment ${i + 1} at ${segmentStartTime}`,
+              treatmentIndex: i,
+              conflicts: providerConflict.conflicts
+            }
+          });
+        }
+      }
+
       // Get treatment info for title
       const treatmentInfo = await ProductService.findByPk(treatment.treatmentId);
 
@@ -1079,6 +1123,26 @@ router.put('/appointments/group/:groupId', async (req, res) => {
               error: {
                 message: `Machine conflict at ${newStartTime}`,
                 appointmentId: apt.id
+              }
+            });
+          }
+        }
+
+        // Check provider conflicts (group appointments are treatments, so only consultations block)
+        const effectiveProviderId = (providerId !== undefined ? providerId : apt.provider_id) || null;
+        if (effectiveProviderId) {
+          const providerConflict = await planningService.checkProviderConflicts(
+            req.clinicDb, effectiveProviderId, date || apt.appointment_date,
+            newStartTime, newEndTime, apt.id
+          );
+          if (providerConflict.hasConsultationConflict) {
+            await transaction.rollback();
+            return res.status(409).json({
+              success: false,
+              error: {
+                message: `Provider conflict at ${newStartTime}`,
+                appointmentId: apt.id,
+                conflicts: providerConflict.conflicts
               }
             });
           }
