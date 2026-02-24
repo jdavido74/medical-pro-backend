@@ -205,6 +205,8 @@ class ClinicProvisioningService {
         'clinic_062_vitals_glycemia_appointment_link.sql',
         // Evolution notes on medical records
         'clinic_063_add_evolution_to_medical_records.sql',
+        // Patient profile status (provisional/complete) for quick creation
+        'clinic_064_patient_profile_status.sql',
         // Default roles insertion
         '025_insert_default_clinic_roles.sql'
       ];

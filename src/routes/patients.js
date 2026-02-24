@@ -30,7 +30,127 @@ const querySchema = Joi.object({
   limit: Joi.number().integer().min(1).max(1000).default(20),
   search: Joi.string().max(255).allow('').optional(),
   status: Joi.string().valid('active', 'inactive', 'archived').optional(),
+  profile_status: Joi.string().valid('provisional', 'complete').optional(),
   showAll: Joi.boolean().default(false) // Admin only: voir tous les patients
+});
+
+// Placeholder names used for provisional patients
+const PLACEHOLDER_NAMES = ['À COMPLÉTER', 'A COMPLETAR', 'TO COMPLETE'];
+
+// ============================================================================
+// ROUTE POST /provisional - Création rapide de patient provisoire
+// Seuls first_name + phone sont requis. last_name = placeholder, email = null
+// ============================================================================
+router.post('/provisional', async (req, res, next) => {
+  try {
+    // Validate with provisional schema (only first_name + phone required)
+    const { error, value } = schemas.createProvisionalPatientSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: 'Validation Error',
+          details: error.details.map(d => d.message).join(', ')
+        }
+      });
+    }
+
+    const Patient = await getModel(req.clinicDb, 'Patient');
+
+    // Auto-fill facility_id
+    if (!value.facility_id) {
+      const [facilities] = await req.clinicDb.query(
+        `SELECT id FROM medical_facilities WHERE is_active = true LIMIT 1`
+      );
+      if (facilities && facilities.length > 0) {
+        value.facility_id = facilities[0].id;
+      } else if (req.user.companyId) {
+        value.facility_id = req.user.companyId;
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'No facility available for this clinic' }
+        });
+      }
+    }
+
+    // Auto-fill placeholder values for missing fields
+    if (!value.last_name) {
+      value.last_name = 'À COMPLÉTER';
+    }
+    // email stays null if not provided (column allows null)
+
+    // Set profile_status to provisional
+    value.profile_status = 'provisional';
+
+    // Duplicate check by phone only (not by name, since last_name is placeholder)
+    const existingByPhone = await Patient.findOne({
+      where: {
+        phone: value.phone,
+        archived: false
+      }
+    });
+
+    if (existingByPhone) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          message: 'Un patient avec ce numéro de téléphone existe déjà',
+          details: 'Duplicate phone number',
+          existingPatient: {
+            id: existingByPhone.id,
+            firstName: existingByPhone.first_name,
+            lastName: existingByPhone.last_name,
+            patientNumber: existingByPhone.patient_number
+          }
+        }
+      });
+    }
+
+    // Create the patient
+    const patient = await Patient.create(value);
+
+    logger.info(`✅ Provisional patient created: ${patient.first_name} (${patient.phone})`, {
+      patientId: patient.id,
+      clinicId: req.user.companyId
+    });
+
+    // Auto-add creator to care team (same logic as onAfterCreate)
+    try {
+      const HealthcareProvider = await getModel(req.clinicDb, 'HealthcareProvider');
+      const PatientCareTeam = await getModel(req.clinicDb, 'PatientCareTeam');
+
+      const provider = await HealthcareProvider.findOne({
+        where: { central_user_id: req.user.id },
+        attributes: ['id']
+      });
+
+      if (provider) {
+        await PatientCareTeam.findOrCreate({
+          where: {
+            patient_id: patient.id,
+            provider_id: provider.id
+          },
+          defaults: {
+            patient_id: patient.id,
+            provider_id: provider.id,
+            role: 'primary_physician',
+            access_level: 'full',
+            granted_at: new Date()
+          }
+        });
+      }
+    } catch (careTeamError) {
+      logger.error(`Failed to add to care team: ${careTeamError.message}`);
+    }
+
+    res.status(201).json({
+      success: true,
+      data: patient
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // ============================================================================
@@ -52,7 +172,7 @@ router.get('/', async (req, res, next) => {
       });
     }
 
-    const { page, limit, search, status, showAll } = value;
+    const { page, limit, search, status, profile_status, showAll } = value;
 
     // Récupérer les modèles
     const Patient = await getModel(req.clinicDb, 'Patient');
@@ -80,6 +200,11 @@ router.get('/', async (req, res, next) => {
     // Filtrer les patients archivés par défaut
     if (status !== 'archived') {
       where.archived = false;
+    }
+
+    // Filtrer par profile_status (provisional / complete)
+    if (profile_status) {
+      where.profile_status = profile_status;
     }
 
     // SECRET MÉDICAL: Filtrer par équipe de soins pour les praticiens
@@ -295,24 +420,34 @@ const patientRoutes = clinicCrudRoutes('Patient', {
 
     // Check for duplicates by email + name (clinic-isolated check)
     // Note: Clinic DBs use 'archived' instead of 'deleted_at'
-    if (data.email || (data.first_name && data.last_name)) {
-      const existing = await Patient.findOne({
-        where: {
-          [Op.or]: [
-            data.email ? { email: data.email } : null,
-            (data.first_name && data.last_name) ? {
-              [Op.and]: [
-                { first_name: data.first_name },
-                { last_name: data.last_name }
-              ]
-            } : null
-          ].filter(Boolean),
-          archived: false
-        }
-      });
+    // Skip name-based duplicate check when last_name is a placeholder
+    const isPlaceholderName = PLACEHOLDER_NAMES.includes(data.last_name);
 
-      if (existing) {
-        throw new Error('Patient with this email or name already exists in this clinic');
+    if (data.email || (data.first_name && data.last_name && !isPlaceholderName)) {
+      const orConditions = [];
+      if (data.email) {
+        orConditions.push({ email: data.email });
+      }
+      if (data.first_name && data.last_name && !isPlaceholderName) {
+        orConditions.push({
+          [Op.and]: [
+            { first_name: data.first_name },
+            { last_name: data.last_name }
+          ]
+        });
+      }
+
+      if (orConditions.length > 0) {
+        const existing = await Patient.findOne({
+          where: {
+            [Op.or]: orConditions,
+            archived: false
+          }
+        });
+
+        if (existing) {
+          throw new Error('Patient with this email or name already exists in this clinic');
+        }
       }
     }
 
@@ -361,6 +496,37 @@ const patientRoutes = clinicCrudRoutes('Patient', {
       // Log but don't fail the patient creation
       logger.error(`Failed to add to care team: ${careTeamError.message}`);
     }
+  },
+
+  onBeforeUpdate: async (data, existingRecord, user, clinicDb) => {
+    // Auto-transition: provisional → complete when all required fields are filled
+    if (existingRecord && existingRecord.profile_status === 'provisional') {
+      // Merge existing data with incoming update to check completeness
+      const merged = {
+        first_name: data.first_name || existingRecord.first_name,
+        last_name: data.last_name || existingRecord.last_name,
+        email: data.email || existingRecord.email,
+        phone: data.phone || existingRecord.phone
+      };
+
+      const hasFirstName = merged.first_name && merged.first_name.trim().length >= 2;
+      const hasLastName = merged.last_name && merged.last_name.trim().length >= 2 &&
+        !PLACEHOLDER_NAMES.includes(merged.last_name.trim());
+      const hasEmail = merged.email && merged.email.trim().length > 0;
+      const hasPhone = merged.phone && merged.phone.trim().length > 0;
+
+      if (hasFirstName && hasLastName && hasEmail && hasPhone) {
+        data.profile_status = 'complete';
+        logger.info(`✅ Patient ${existingRecord.id} auto-transitioned from provisional to complete`);
+      }
+    }
+
+    // Prevent complete → provisional transition (one-way only)
+    if (data.profile_status === 'provisional' && existingRecord && existingRecord.profile_status === 'complete') {
+      delete data.profile_status;
+    }
+
+    return data;
   }
 });
 

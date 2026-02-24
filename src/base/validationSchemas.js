@@ -225,10 +225,40 @@ module.exports.updatePatientSchema = Joi.object({
   coverage_type: Joi.string().allow('').optional(),
 
   // Metadata
+  profile_status: Joi.string().valid('provisional', 'complete').optional(),
   is_incomplete: Joi.boolean().optional(),
   is_active: Joi.boolean().optional(),
   notes: atomicSchemas.notes
 }).min(1);
+
+// Schema for provisional patient creation (quick create: first_name + phone only)
+module.exports.createProvisionalPatientSchema = Joi.object({
+  facility_id: Joi.string().uuid().optional(),
+
+  // REQUIRED: only first_name + phone
+  first_name: atomicSchemas.firstName.required().messages({
+    'any.required': 'Le prénom est obligatoire / El nombre es obligatorio',
+    'string.empty': 'Le prénom ne peut pas être vide / El nombre no puede estar vacío',
+    'string.min': 'Le prénom doit contenir au moins 2 caractères / El nombre debe tener al menos 2 caracteres'
+  }),
+  phone: atomicSchemas.phone.required().messages({
+    'any.required': 'Le téléphone est obligatoire / El teléfono es obligatorio',
+    'string.empty': 'Le téléphone ne peut pas être vide / El teléfono no puede estar vacío',
+    'string.pattern.base': 'Le téléphone doit contenir l\'indicatif pays (ex: +34612345678) / El teléfono debe incluir código de país (ej: +34612345678)'
+  }),
+
+  // OPTIONAL: all other fields
+  last_name: atomicSchemas.lastName.optional(),
+  email: atomicSchemas.email.optional().allow(null, ''),
+  birth_date: Joi.date().iso().max('now').allow(null, '').optional(),
+  gender: atomicSchemas.gender,
+  nationality: Joi.string().max(100).allow('').optional(),
+  id_number: atomicSchemas.idNumber,
+  social_security_number: atomicSchemas.socialSecurityNumber,
+  patient_number: atomicSchemas.patientNumber,
+  mobile: Joi.string().allow('').optional(),
+  notes: atomicSchemas.notes
+});
 
 module.exports.createAppointmentSchema = Joi.object({
   // IDs

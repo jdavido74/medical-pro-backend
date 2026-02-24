@@ -60,7 +60,8 @@ const NEW_MIGRATIONS = [
   'clinic_060_custom_medications.sql',
   'clinic_061_admin_medical_nurse_role.sql',
   'clinic_062_vitals_glycemia_appointment_link.sql',
-  'clinic_063_add_evolution_to_medical_records.sql'
+  'clinic_063_add_evolution_to_medical_records.sql',
+  'clinic_064_patient_profile_status.sql'
 ];
 
 async function getClinicDatabases() {

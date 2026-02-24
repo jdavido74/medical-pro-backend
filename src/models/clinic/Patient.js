@@ -203,6 +203,13 @@ function createPatientModel(clinicDb) {
       allowNull: true
     },
 
+    // Profile completeness status (provisional = quick create, complete = full profile)
+    profile_status: {
+      type: DataTypes.ENUM('provisional', 'complete'),
+      allowNull: false,
+      defaultValue: 'complete'
+    },
+
     // Status fields (NOT deleted_at!)
     is_active: {
       type: DataTypes.BOOLEAN,
@@ -223,7 +230,8 @@ function createPatientModel(clinicDb) {
       { fields: ['email'] },
       { fields: ['first_name', 'last_name'] },
       { fields: ['is_active'] },
-      { fields: ['archived'] }
+      { fields: ['archived'] },
+      { fields: ['profile_status'] }
     ],
     hooks: {
       beforeCreate: (patient, opts) => {
@@ -252,6 +260,20 @@ function createPatientModel(clinicDb) {
       age--;
     }
     return age;
+  };
+
+  /**
+   * Check if patient profile has all required fields filled
+   * Used to determine if a provisional patient can transition to complete
+   */
+  Patient.prototype.isProfileComplete = function() {
+    const PLACEHOLDER_NAMES = ['À COMPLÉTER', 'A COMPLETAR', 'TO COMPLETE'];
+    const hasFirstName = this.first_name && this.first_name.trim().length >= 2;
+    const hasLastName = this.last_name && this.last_name.trim().length >= 2 &&
+      !PLACEHOLDER_NAMES.includes(this.last_name.trim());
+    const hasEmail = this.email && this.email.trim().length > 0;
+    const hasPhone = this.phone && this.phone.trim().length > 0;
+    return hasFirstName && hasLastName && hasEmail && hasPhone;
   };
 
   /**
