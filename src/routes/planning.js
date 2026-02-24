@@ -548,6 +548,94 @@ router.put('/appointments/:id', async (req, res) => {
       }
     }
 
+    // Handle treatment substitution (service_id changed)
+    if (updateData.service_id && updateData.service_id !== appointment.service_id) {
+      const ProductService = await getModel(req.clinicDb, 'ProductService');
+      const newTreatment = await ProductService.findByPk(updateData.service_id);
+
+      if (!newTreatment || newTreatment.is_active === false) {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'Treatment not found or inactive' }
+        });
+      }
+
+      // Update duration, title, end_time
+      updateData.duration_minutes = newTreatment.duration || 30;
+      updateData.title = newTreatment.title;
+      const effectiveStart = req.body.startTime || appointment.start_time?.substring(0, 5);
+      const startMinutes = planningService.timeToMinutes(effectiveStart);
+      updateData.end_time = planningService.minutesToTime(startMinutes + updateData.duration_minutes);
+
+      // Handle machine assignment
+      if (newTreatment.is_overlappable) {
+        updateData.machine_id = null;
+      } else {
+        // Find compatible machines for the new treatment
+        const compatibleMachines = await req.clinicDb.query(`
+          SELECT m.id FROM machines m
+          INNER JOIN machine_treatments mt ON m.id = mt.machine_id
+          WHERE mt.treatment_id = :treatmentId AND m.is_active = true
+        `, {
+          replacements: { treatmentId: updateData.service_id },
+          type: require('sequelize').QueryTypes.SELECT
+        });
+
+        const compatibleIds = compatibleMachines.map(m => m.id);
+
+        if (appointment.machine_id && compatibleIds.includes(appointment.machine_id)) {
+          // Current machine is compatible — keep it, but check for conflicts
+          const effectiveDate = req.body.date ? req.body.date : appointment.appointment_date;
+          const Appointment = await getModel(req.clinicDb, 'Appointment');
+          const hasConflict = await Appointment.checkMachineConflict(
+            appointment.machine_id, effectiveDate, effectiveStart, updateData.end_time, id
+          );
+          if (hasConflict) {
+            // Try to find another compatible machine without conflict
+            let assigned = false;
+            for (const cm of compatibleMachines) {
+              const conflict = await Appointment.checkMachineConflict(
+                cm.id, effectiveDate, effectiveStart, updateData.end_time, id
+              );
+              if (!conflict) {
+                updateData.machine_id = cm.id;
+                assigned = true;
+                break;
+              }
+            }
+            if (!assigned) {
+              return res.status(409).json({
+                success: false,
+                error: { code: 'NO_MACHINE_AVAILABLE', message: 'No compatible machine available at this time slot' }
+              });
+            }
+          }
+          // No conflict with current machine — keep it (no change to machine_id)
+        } else {
+          // Current machine is not compatible — find a new one
+          const effectiveDate = req.body.date ? req.body.date : appointment.appointment_date;
+          const Appointment = await getModel(req.clinicDb, 'Appointment');
+          let assigned = false;
+          for (const cm of compatibleMachines) {
+            const conflict = await Appointment.checkMachineConflict(
+              cm.id, effectiveDate, effectiveStart, updateData.end_time, id
+            );
+            if (!conflict) {
+              updateData.machine_id = cm.id;
+              assigned = true;
+              break;
+            }
+          }
+          if (!assigned) {
+            return res.status(409).json({
+              success: false,
+              error: { code: 'NO_MACHINE_AVAILABLE', message: 'No compatible machine available at this time slot' }
+            });
+          }
+        }
+      }
+    }
+
     // Handle date/time changes
     if (req.body.date) {
       updateData.appointment_date = req.body.date;
